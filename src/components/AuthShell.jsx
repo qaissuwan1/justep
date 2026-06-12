@@ -47,18 +47,6 @@ export function AuthShell({ children, side }) {
             {side?.subtitle ||
               "Your question bank, flashcards, and analytics — all in one place, built for medical students."}
           </p>
-          <div style={{ display: "flex", gap: 28, marginTop: 36 }}>
-            {(side?.stats || [
-              { value: "1,200+", label: "Questions" },
-              { value: "750+", label: "Flashcards" },
-              { value: "91%", label: "Pass rate" },
-            ]).map((s) => (
-              <div key={s.label}>
-                <div style={{ fontSize: 24, fontWeight: 800 }}>{s.value}</div>
-                <div style={{ fontSize: 12, color: "rgba(255,255,255,0.5)" }}>{s.label}</div>
-              </div>
-            ))}
-          </div>
         </div>
         <div style={{ fontSize: 13, color: "rgba(255,255,255,0.4)" }}>© 2026 JUstep</div>
       </div>
