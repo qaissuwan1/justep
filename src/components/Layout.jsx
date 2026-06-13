@@ -1,6 +1,8 @@
 // Authenticated app shell: navy sidebar + main content via <Outlet />.
+import { useEffect, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
-import { colors, gradients, font, currentUser } from "../theme";
+import { colors, gradients, font } from "../theme";
+import { supabase } from "../lib/supabase";
 
 const navItems = [
   { to: "/app/home", icon: "⊞", label: "Dashboard" },
@@ -14,6 +16,24 @@ const navItems = [
 
 export default function Layout() {
   const navigate = useNavigate();
+  const [user, setUser] = useState(null);
+
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data }) => setUser(data.user));
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+    });
+    return () => listener.subscription.unsubscribe();
+  }, []);
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    navigate("/login");
+  };
+
+  const email = user?.email || "";
+  const initial = (email[0] || "U").toUpperCase();
+  const fullName = user?.user_metadata?.full_name;
 
   return (
     <div style={{ fontFamily: font, background: colors.bg, minHeight: "100vh", display: "flex", color: colors.text }}>
@@ -111,15 +131,27 @@ export default function Layout() {
                 flexShrink: 0,
               }}
             >
-              {currentUser.initial}
+              {initial}
             </div>
-            <div>
-              <div style={{ fontSize: 13, fontWeight: 600, color: "#fff" }}>{currentUser.name}</div>
-              <div style={{ fontSize: 11, color: "rgba(255,255,255,0.4)" }}>{currentUser.year}</div>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div
+                style={{
+                  fontSize: 13,
+                  fontWeight: 600,
+                  color: "#fff",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+                title={email}
+              >
+                {email || "Signed in"}
+              </div>
+              <div style={{ fontSize: 11, color: "rgba(255,255,255,0.4)" }}>{fullName || "Student"}</div>
             </div>
           </div>
           <button
-            onClick={() => navigate("/login")}
+            onClick={handleLogout}
             style={{
               width: "100%",
               background: "transparent",

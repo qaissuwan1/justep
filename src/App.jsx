@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate, Link } from "react-router-dom";
 import Layout from "./components/Layout";
+import ProtectedRoute from "./components/ProtectedRoute";
 import Landing from "./pages/Landing";
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
@@ -34,7 +35,14 @@ export default function App() {
         <Route path="/signup" element={<Signup />} />
 
         {/* Authenticated app shell */}
-        <Route path="/app" element={<Layout />}>
+        <Route
+          path="/app"
+          element={
+            <ProtectedRoute>
+              <Layout />
+            </ProtectedRoute>
+          }
+        >
           <Route index element={<Navigate to="/app/home" replace />} />
           <Route path="home" element={<Home />} />
           <Route path="questions" element={<Questions />} />
