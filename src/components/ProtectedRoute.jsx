@@ -27,7 +27,8 @@ export default function ProtectedRoute({ children }) {
   }, []);
 
   if (session === undefined) {
-    // Brief loading state while the session is resolved.
+    // Session still resolving — show a spinner so the UI doesn't flash to /login
+    // before getSession() restores a persisted session from localStorage.
     return (
       <div
         style={{
@@ -35,13 +36,26 @@ export default function ProtectedRoute({ children }) {
           minHeight: "100vh",
           background: colors.bg,
           display: "flex",
+          flexDirection: "column",
           alignItems: "center",
           justifyContent: "center",
+          gap: 16,
           color: colors.textSoft,
           fontSize: 14,
         }}
       >
-        Loading…
+        <style>{`@keyframes ju-spin{to{transform:rotate(360deg)}}`}</style>
+        <div
+          style={{
+            width: 42,
+            height: 42,
+            borderRadius: "50%",
+            border: `3px solid ${colors.line}`,
+            borderTopColor: colors.blue,
+            animation: "ju-spin 0.7s linear infinite",
+          }}
+        />
+        Checking your session…
       </div>
     );
   }
