@@ -13,6 +13,7 @@ const ADMIN_NAV = [
   { id: "questions", icon: "📋", label: "Manage Questions" },
   { id: "flashcards", icon: "🃏", label: "Manage Flashcards" },
   { id: "subjects", icon: "📚", label: "Manage Subjects" },
+  { id: "systems", icon: "🗂️", label: "Manage Systems" },
   { id: "users", icon: "👥", label: "User Management" },
   { id: "analytics", icon: "📊", label: "Analytics" },
 ];
@@ -482,7 +483,7 @@ function UploadLecture() {
 // ════════════════════════════════════════════════════════════════════════════
 // Question add/edit form (modal)
 // ════════════════════════════════════════════════════════════════════════════
-const blankQuestion = { subject_id: "", topic: "", difficulty: "medium", stem: "", options: ["", "", "", ""], correct_answer: 0, explanation: "", board_trap: "" };
+const blankQuestion = { subject_id: "", topic: "", difficulty: "medium", stem: "", options: ["", "", "", ""], correct_answer: 0, explanation: "", board_trap: "", high_yield: "" };
 
 function QuestionForm({ subjects, initial, onClose, onSaved }) {
   const [q, setQ] = useState(() => ({ ...blankQuestion, ...initial, options: initial?.options?.length ? [...initial.options] : ["", "", "", ""], subject_id: initial?.subject_id || subjects[0]?.id || "" }));
@@ -507,6 +508,7 @@ function QuestionForm({ subjects, initial, onClose, onSaved }) {
       correct_answer: Number(q.correct_answer),
       explanation: q.explanation.trim(),
       board_trap: q.board_trap.trim() || null,
+      high_yield: q.high_yield.trim() || null,
     };
     const res = editing
       ? await supabase.from("questions").update(payload).eq("id", initial.id)
@@ -569,9 +571,13 @@ function QuestionForm({ subjects, initial, onClose, onSaved }) {
         <FieldLabel>Explanation</FieldLabel>
         <textarea value={q.explanation} onChange={(e) => setQ({ ...q, explanation: e.target.value })} rows={2} style={{ ...inputStyle, resize: "vertical" }} />
       </div>
-      <div>
+      <div style={{ marginBottom: 14 }}>
         <FieldLabel>Board trap (optional)</FieldLabel>
         <input value={q.board_trap} onChange={(e) => setQ({ ...q, board_trap: e.target.value })} placeholder="Common distractor to warn about" style={inputStyle} />
+      </div>
+      <div>
+        <FieldLabel>High-Yield summary (optional)</FieldLabel>
+        <textarea value={q.high_yield} onChange={(e) => setQ({ ...q, high_yield: e.target.value })} rows={2} placeholder="Key takeaway students should remember" style={{ ...inputStyle, resize: "vertical" }} />
       </div>
     </Modal>
   );
@@ -1003,6 +1009,164 @@ function ManageSubjects() {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// MANAGE SYSTEMS
+// ════════════════════════════════════════════════════════════════════════════
+function ManageSystems() {
+  const [systems, setSystems] = useState([]);
+  const [subjects, setSubjects] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  const [name, setName] = useState("");
+  const [color, setColor] = useState(SUBJECT_COLORS[0]);
+  const [saving, setSaving] = useState(false);
+
+  const load = async () => {
+    const [sys, subs] = await Promise.all([
+      supabase.from("systems").select("*").order("name"),
+      supabase.from("subjects").select("id, name, color, system_id").order("name"),
+    ]);
+    if (sys.error) setErr(sys.error.message);
+    else {
+      setErr("");
+      setSystems(sys.data || []);
+      setSubjects(subs.data || []);
+    }
+    setLoading(false);
+  };
+  useEffect(() => {
+    (async () => {
+      await load();
+    })();
+  }, []);
+
+  const addSystem = async () => {
+    setErr("");
+    if (!name.trim()) return setErr("System name is required.");
+    setSaving(true);
+    const { error } = await supabase.from("systems").insert({ name: name.trim(), color });
+    setSaving(false);
+    if (error) return setErr(error.message);
+    setName("");
+    load();
+  };
+
+  const removeSystem = async (id) => {
+    if (!window.confirm("Delete this system? Subjects assigned to it will become unassigned.")) return;
+    const { error } = await supabase.from("systems").delete().eq("id", id);
+    if (error) setErr(error.message);
+    else load();
+  };
+
+  const assignSubject = async (subjectId, systemId) => {
+    const next = systemId || null;
+    const { error } = await supabase.from("subjects").update({ system_id: next }).eq("id", subjectId);
+    if (error) setErr(error.message);
+    else setSubjects((subs) => subs.map((s) => (s.id === subjectId ? { ...s, system_id: next } : s)));
+  };
+
+  const subjectCount = (sysId) => subjects.filter((s) => s.system_id === sysId).length;
+
+  const swatch = (c) => <span style={{ width: 12, height: 12, borderRadius: 4, background: c || colors.blue, display: "inline-block", flexShrink: 0 }} />;
+
+  return (
+    <>
+      <AdminHeader title="Manage Systems" subtitle="Group subjects into organ systems / blocks" />
+      {err && <Banner>{err}</Banner>}
+
+      {/* Add system */}
+      <Card style={{ marginBottom: 18 }}>
+        <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 14 }}>Add a system</div>
+        <div style={{ display: "flex", gap: 14, alignItems: "flex-end", flexWrap: "wrap" }}>
+          <div style={{ flex: 1, minWidth: 200 }}>
+            <FieldLabel>Name</FieldLabel>
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Cardiovascular" style={inputStyle} />
+          </div>
+          <div>
+            <FieldLabel>Colour</FieldLabel>
+            <div style={{ display: "flex", gap: 6 }}>
+              {SUBJECT_COLORS.map((c) => (
+                <button key={c} onClick={() => setColor(c)} style={{ width: 28, height: 28, borderRadius: 7, background: c, border: color === c ? `3px solid ${colors.navy}` : "3px solid transparent", cursor: "pointer" }} />
+              ))}
+            </div>
+          </div>
+          <PrimaryButton onClick={addSystem} style={{ opacity: saving ? 0.7 : 1, pointerEvents: saving ? "none" : "auto" }}>{saving ? "Adding…" : "Add system"}</PrimaryButton>
+        </div>
+      </Card>
+
+      {/* Systems table */}
+      <Card style={{ padding: 0, overflow: "hidden", marginBottom: 18 }}>
+        {loading ? (
+          <Spinner />
+        ) : systems.length === 0 ? (
+          <EmptyState icon="🗂️">No systems yet. Add one above.</EmptyState>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ background: "#F8FAFF" }}>
+                <th style={th}>System</th>
+                <th style={th}>Colour</th>
+                <th style={th}>Subjects</th>
+                <th style={{ ...th, textAlign: "right" }}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {systems.map((s) => (
+                <tr key={s.id}>
+                  <td style={{ ...td, fontWeight: 600 }}>
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>{swatch(s.color)}{s.name}</span>
+                  </td>
+                  <td style={{ ...td, color: colors.textMuted, fontSize: 12 }}>{s.color}</td>
+                  <td style={td}>{subjectCount(s.id)}</td>
+                  <td style={{ ...td, textAlign: "right" }}>
+                    <button onClick={() => removeSystem(s.id)} style={{ ...iconBtn, color: colors.red, borderColor: "#FECACA" }}>Delete</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Card>
+
+      {/* Assign subjects to systems */}
+      <Card style={{ padding: 0, overflow: "hidden" }}>
+        <div style={{ padding: "18px 24px", borderBottom: `1px solid ${colors.line}`, fontSize: 15, fontWeight: 700 }}>Assign subjects to systems</div>
+        {loading ? (
+          <Spinner />
+        ) : subjects.length === 0 ? (
+          <EmptyState icon="📚">No subjects yet. Add subjects first.</EmptyState>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ background: "#F8FAFF" }}>
+                <th style={th}>Subject</th>
+                <th style={th}>System</th>
+              </tr>
+            </thead>
+            <tbody>
+              {subjects.map((s) => (
+                <tr key={s.id}>
+                  <td style={{ ...td, fontWeight: 600 }}>
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>{swatch(s.color)}{s.name}</span>
+                  </td>
+                  <td style={td}>
+                    <select value={s.system_id || ""} onChange={(e) => assignSubject(s.id, e.target.value)} style={{ ...inputStyle, width: 260 }}>
+                      <option value="">— Unassigned —</option>
+                      {systems.map((sys) => (
+                        <option key={sys.id} value={sys.id}>{sys.name}</option>
+                      ))}
+                    </select>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Card>
+    </>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // 6. USER MANAGEMENT
 // ════════════════════════════════════════════════════════════════════════════
 function UserManagement() {
@@ -1273,6 +1437,7 @@ export default function Admin() {
     questions: <ManageQuestions />,
     flashcards: <ManageFlashcards />,
     subjects: <ManageSubjects />,
+    systems: <ManageSystems />,
     users: <UserManagement />,
     analytics: <Analytics />,
   };
