@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { colors, gradients, font } from "../theme";
 import { Card, Pill, ProgressBar, PrimaryButton, StatCard } from "../components/ui";
 import StudentAnalytics from "../components/StudentAnalytics";
+import LecturePipeline from "../components/LecturePipeline";
+import ImportJson from "../components/ImportJson";
 import { computeStreak, dayKey } from "../lib/progress";
 
 // Bootstrap allowlist so the panel is reachable before any profile has role='admin'.
@@ -12,6 +14,7 @@ const ADMIN_EMAILS = ["hasansuwan@outlook.com", "qais@ju.edu.jo"];
 const ADMIN_NAV = [
   { id: "overview", icon: "⊞", label: "Dashboard Overview" },
   { id: "upload", icon: "⬆", label: "Upload Lecture" },
+  { id: "importJson", icon: "📥", label: "Import JSON" },
   { id: "questions", icon: "📋", label: "Manage Questions" },
   { id: "flashcards", icon: "🃏", label: "Manage Flashcards" },
   { id: "subjects", icon: "📚", label: "Manage Subjects" },
@@ -246,237 +249,12 @@ function DashboardOverview({ onNavigate }) {
 // ════════════════════════════════════════════════════════════════════════════
 // 2. UPLOAD LECTURE (AI PIPELINE)
 // ════════════════════════════════════════════════════════════════════════════
-const AGENTS = [
-  { key: "analyzer", icon: "🔍", name: "Analyzer", desc: "Extracts key concepts from the lecture" },
-  { key: "writer", icon: "✍️", name: "Writer", desc: "Drafts exam-style MCQs" },
-  { key: "checker", icon: "🧪", name: "Checker", desc: "Verifies medical accuracy" },
-  { key: "publisher", icon: "🚀", name: "Publisher", desc: "Formats and stages for review" },
-];
-
-function makeGeneratedQuestions(topic, subjectName) {
-  const t = topic || "this topic";
-  return [
-    {
-      difficulty: "medium",
-      stem: `A patient presents with findings classically associated with ${t}. Which underlying mechanism best explains this?`,
-      options: ["A plausible but incorrect mechanism", `The core mechanism of ${t}`, "An unrelated pathway", "A distractor from another system"],
-      correct_answer: 1,
-      explanation: `This item checks the central principle of ${t} within ${subjectName}. The correct option reflects what the lecture emphasised.`,
-      board_trap: `Don't confuse ${t} with a superficially similar concept tested on boards.`,
-    },
-    {
-      difficulty: "easy",
-      stem: `Which of the following is a defining feature of ${t}?`,
-      options: [`A hallmark feature of ${t}`, "A feature of a different condition", "A non-specific finding", "An incorrect association"],
-      correct_answer: 0,
-      explanation: `A foundational recall question on ${t}, suitable for early review.`,
-      board_trap: `Watch for answer choices that describe a related ${subjectName} entity.`,
-    },
-    {
-      difficulty: "hard",
-      stem: `A second-order question integrating ${t} with clinical management. What is the most appropriate next step?`,
-      options: ["A reasonable-sounding wrong step", "An outdated approach", `The guideline-correct step for ${t}`, "A harmful intervention"],
-      correct_answer: 2,
-      explanation: `Integrates ${t} with management reasoning — the kind of synthesis Step 1 rewards.`,
-      board_trap: `The trap option is plausible but ignores the key detail from the ${t} lecture.`,
-    },
-  ];
-}
 
 function UploadLecture() {
-  const subjects = useSubjects();
-  const [file, setFile] = useState(null);
-  const [dragOver, setDragOver] = useState(false);
-  const [subjectId, setSubjectId] = useState("");
-  const [topic, setTopic] = useState("");
-  const [status, setStatus] = useState({}); // agentKey -> 'running' | 'done'
-  const [running, setRunning] = useState(false);
-  const [generated, setGenerated] = useState(null);
-  const [included, setIncluded] = useState({});
-  const [msg, setMsg] = useState(null);
-  const fileRef = useRef(null);
-  const timers = useRef([]);
-
-  useEffect(() => () => timers.current.forEach(clearTimeout), []);
-
-  // Derived so we don't need an effect to seed the default subject.
-  const effectiveSubjectId = subjectId || subjects[0]?.id || "";
-
-  const onDrop = (e) => {
-    e.preventDefault();
-    setDragOver(false);
-    const f = e.dataTransfer.files?.[0];
-    if (f) setFile(f);
-  };
-
-  const runPipeline = () => {
-    setMsg(null);
-    if (!file) return setMsg({ kind: "error", text: "Please add a lecture PDF first." });
-    if (!effectiveSubjectId) return setMsg({ kind: "error", text: "Please select a subject." });
-    if (!topic.trim()) return setMsg({ kind: "error", text: "Please enter a topic name." });
-
-    setRunning(true);
-    setGenerated(null);
-    setStatus({});
-    timers.current.forEach(clearTimeout);
-    timers.current = [];
-
-    AGENTS.forEach((agent, i) => {
-      timers.current.push(setTimeout(() => setStatus((s) => ({ ...s, [agent.key]: "running" })), i * 1200));
-      timers.current.push(setTimeout(() => setStatus((s) => ({ ...s, [agent.key]: "done" })), i * 1200 + 1000));
-    });
-    timers.current.push(
-      setTimeout(() => {
-        const subjectName = subjects.find((s) => s.id === effectiveSubjectId)?.name || "this subject";
-        const qs = makeGeneratedQuestions(topic.trim(), subjectName);
-        setGenerated(qs);
-        setIncluded(Object.fromEntries(qs.map((_, i) => [i, true])));
-        setRunning(false);
-      }, AGENTS.length * 1200 + 400)
-    );
-  };
-
-  const publish = async () => {
-    setMsg(null);
-    const rows = generated
-      .filter((_, i) => included[i])
-      .map((q) => ({
-        subject_id: effectiveSubjectId,
-        topic: topic.trim(),
-        difficulty: q.difficulty,
-        stem: q.stem,
-        options: q.options,
-        correct_answer: q.correct_answer,
-        explanation: q.explanation,
-        board_trap: q.board_trap,
-        published: true,
-      }));
-    if (!rows.length) return setMsg({ kind: "error", text: "Select at least one question to publish." });
-    const { error } = await supabase.from("questions").insert(rows);
-    if (error) return setMsg({ kind: "error", text: error.message });
-    setMsg({ kind: "ok", text: `Published ${rows.length} question(s) to the bank.` });
-    setGenerated(null);
-    setFile(null);
-    setTopic("");
-    setStatus({});
-  };
-
   return (
     <>
-      <AdminHeader title="Upload Lecture" subtitle="Turn lecture slides into reviewed questions with the AI pipeline" />
-      {msg && <Banner kind={msg.kind}>{msg.text}</Banner>}
-
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 }}>
-        {/* Upload + meta */}
-        <Card style={{ padding: "22px 24px" }}>
-          <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 16 }}>1 · Lecture source</div>
-
-          <div
-            onClick={() => fileRef.current?.click()}
-            onDragOver={(e) => {
-              e.preventDefault();
-              setDragOver(true);
-            }}
-            onDragLeave={() => setDragOver(false)}
-            onDrop={onDrop}
-            style={{
-              border: `2px dashed ${dragOver ? colors.blue : colors.line}`,
-              background: dragOver ? "rgba(79,142,247,0.06)" : "#F8FAFF",
-              borderRadius: 14,
-              padding: "32px 20px",
-              textAlign: "center",
-              cursor: "pointer",
-              transition: "all 0.15s",
-            }}
-          >
-            <input ref={fileRef} type="file" accept="application/pdf" hidden onChange={(e) => setFile(e.target.files?.[0] || null)} />
-            <div style={{ fontSize: 34, marginBottom: 8 }}>{file ? "📄" : "⬆️"}</div>
-            {file ? (
-              <div style={{ fontSize: 14, fontWeight: 600, color: colors.text }}>{file.name}</div>
-            ) : (
-              <>
-                <div style={{ fontSize: 14, fontWeight: 600, color: colors.text }}>Drag &amp; drop a PDF here</div>
-                <div style={{ fontSize: 12, color: colors.textMuted, marginTop: 4 }}>or click to browse</div>
-              </>
-            )}
-          </div>
-
-          <div style={{ marginTop: 18 }}>
-            <FieldLabel>Subject</FieldLabel>
-            <select value={effectiveSubjectId} onChange={(e) => setSubjectId(e.target.value)} style={inputStyle}>
-              {subjects.length === 0 && <option value="">No subjects yet — add one first</option>}
-              {subjects.map((s) => (
-                <option key={s.id} value={s.id}>{s.name}</option>
-              ))}
-            </select>
-          </div>
-
-          <div style={{ marginTop: 14 }}>
-            <FieldLabel>Topic name</FieldLabel>
-            <input value={topic} onChange={(e) => setTopic(e.target.value)} placeholder="e.g. Beta Blockers" style={inputStyle} />
-          </div>
-
-          <PrimaryButton full style={{ marginTop: 20, opacity: running ? 0.7 : 1, pointerEvents: running ? "none" : "auto" }} onClick={runPipeline}>
-            {running ? "Running pipeline…" : "Run AI pipeline →"}
-          </PrimaryButton>
-        </Card>
-
-        {/* Pipeline status */}
-        <Card style={{ padding: "22px 24px" }}>
-          <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 16 }}>2 · AI pipeline</div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            {AGENTS.map((agent) => {
-              const st = status[agent.key];
-              return (
-                <div key={agent.key} style={{ display: "flex", alignItems: "center", gap: 14, padding: "12px 14px", borderRadius: 12, background: "#F8FAFF", border: `1.5px solid ${st === "running" ? colors.blue : "transparent"}` }}>
-                  <div style={{ width: 40, height: 40, borderRadius: 10, background: st === "done" ? "#ECFDF5" : "rgba(79,142,247,0.1)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>
-                    {agent.icon}
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 14, fontWeight: 700 }}>{agent.name}</div>
-                    <div style={{ fontSize: 12, color: colors.textMuted }}>{agent.desc}</div>
-                  </div>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: st === "done" ? colors.green : st === "running" ? colors.blue : colors.textMuted }}>
-                    {st === "done" ? "✓ Done" : st === "running" ? "● Running" : "Idle"}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </Card>
-      </div>
-
-      {/* Generated preview */}
-      {generated && (
-        <Card style={{ padding: "22px 24px", marginTop: 18 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-            <div style={{ fontSize: 15, fontWeight: 700 }}>3 · Review &amp; publish ({generated.length} generated)</div>
-            <PrimaryButton onClick={publish}>Publish selected →</PrimaryButton>
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            {generated.map((q, i) => (
-              <div key={i} style={{ border: `1.5px solid ${colors.line}`, borderRadius: 12, padding: "16px 18px" }}>
-                <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
-                  <input type="checkbox" checked={!!included[i]} onChange={(e) => setIncluded((inc) => ({ ...inc, [i]: e.target.checked }))} style={{ accentColor: colors.blue, marginTop: 4 }} />
-                  <div style={{ flex: 1 }}>
-                    <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-                      <Pill color={diffColor[q.difficulty]} bg={`${diffColor[q.difficulty]}1a`}>{q.difficulty}</Pill>
-                    </div>
-                    <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 10, lineHeight: 1.5 }}>{q.stem}</div>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                      {q.options.map((opt, oi) => (
-                        <div key={oi} style={{ fontSize: 13, color: oi === q.correct_answer ? colors.green : colors.textSoft, fontWeight: oi === q.correct_answer ? 700 : 400 }}>
-                          {String.fromCharCode(65 + oi)}. {opt} {oi === q.correct_answer && "✓"}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </Card>
-      )}
+      <AdminHeader title="Upload Lecture" subtitle="Turn a lecture PDF into reviewed questions and flashcards with the AI pipeline" />
+      <LecturePipeline />
     </>
   );
 }
@@ -1492,6 +1270,7 @@ export default function Admin() {
   const sections = {
     overview: <DashboardOverview onNavigate={setSection} />,
     upload: <UploadLecture />,
+    importJson: <ImportJson />,
     questions: <ManageQuestions />,
     flashcards: <ManageFlashcards />,
     subjects: <ManageSubjects />,
