@@ -50,10 +50,10 @@ export default function Questions() {
   const [loadingMeta, setLoadingMeta] = useState(true);
 
   /* -------- setup selections -------- */
-  const [systemId, setSystemId] = useState(null);
+  const [pickedSystems, setPickedSystems] = useState([]); // system ids
   const [pickedSubjects, setPickedSubjects] = useState([]); // subject ids
+  const [counts, setCounts] = useState({ bySubject: {}, bySystem: {} });
   const [numQuestions, setNumQuestions] = useState(10);
-  const [availableCount, setAvailableCount] = useState(0);
   const [mode, setMode] = useState("tutor"); // tutor | timed
   const [starting, setStarting] = useState(false);
   const [setupError, setSetupError] = useState("");
@@ -74,38 +74,40 @@ export default function Questions() {
   const timerRef = useRef(null);
   const [elapsed, setElapsed] = useState(0);
 
-  const subjectsInSystem = subjects.filter((s) => s.system_id === systemId);
   const subjectName = (id) => subjects.find((s) => s.id === id)?.name || "—";
+
+  // Effective subjects = picked subjects, optionally constrained to picked systems.
+  const effectiveSubjectIds = pickedSubjects.filter((sid) => {
+    if (pickedSystems.length === 0) return true;
+    const subj = subjects.find((s) => s.id === sid);
+    return subj && pickedSystems.includes(subj.system_id);
+  });
+  const availableCount = effectiveSubjectIds.reduce((sum, sid) => sum + (counts.bySubject[sid] || 0), 0);
 
   /* ---------------- load systems + subjects ---------------- */
   useEffect(() => {
     (async () => {
       setLoadingMeta(true);
-      const [{ data: sys }, { data: subj }] = await Promise.all([
-        supabase.from("systems").select("id,name,color").order("name"),
-        supabase.from("subjects").select("id,name,color,system_id").order("name"),
+      const [{ data: sys }, { data: subj }, { data: qrows }] = await Promise.all([
+        supabase.from("systems").select("id,name").order("name"),
+        supabase.from("subjects").select("id,name,system_id").order("name"),
+        supabase.from("questions").select("subject_id").eq("published", true),
       ]);
+      const bySubject = {};
+      (qrows || []).forEach((r) => {
+        if (r.subject_id) bySubject[r.subject_id] = (bySubject[r.subject_id] || 0) + 1;
+      });
+      const subjList = subj || [];
+      const bySystem = {};
+      subjList.forEach((s) => {
+        if (s.system_id) bySystem[s.system_id] = (bySystem[s.system_id] || 0) + (bySubject[s.id] || 0);
+      });
       setSystems(sys || []);
-      setSubjects(subj || []);
+      setSubjects(subjList);
+      setCounts({ bySubject, bySystem });
       setLoadingMeta(false);
     })();
   }, []);
-
-  /* ---------------- live available count ---------------- */
-  useEffect(() => {
-    (async () => {
-      if (pickedSubjects.length === 0) {
-        setAvailableCount(0);
-        return;
-      }
-      const { count } = await supabase
-        .from("questions")
-        .select("id", { count: "exact", head: true })
-        .eq("published", true)
-        .in("subject_id", pickedSubjects);
-      setAvailableCount(count || 0);
-    })();
-  }, [pickedSubjects]);
 
   /* ---------------- timer tick ---------------- */
   useEffect(() => {
@@ -133,18 +135,17 @@ export default function Questions() {
 
   /* ---------------- setup helpers ---------------- */
   const toggleSubject = (id) =>
-    setPickedSubjects((p) =>
-      p.includes(id) ? p.filter((x) => x !== id) : [...p, id]
-    );
-
-  const pickSystem = (id) => {
-    setSystemId(id);
-    setPickedSubjects([]);
-  };
+    setPickedSubjects((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
+  const toggleSystem = (id) =>
+    setPickedSystems((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
+  const toggleAllSubjects = () =>
+    setPickedSubjects((p) => (p.length === subjects.length ? [] : subjects.map((s) => s.id)));
+  const toggleAllSystems = () =>
+    setPickedSystems((p) => (p.length === systems.length ? [] : systems.map((s) => s.id)));
 
   async function startBlock() {
     setSetupError("");
-    if (pickedSubjects.length === 0) {
+    if (effectiveSubjectIds.length === 0) {
       setSetupError("Choose at least one subject.");
       return;
     }
@@ -158,7 +159,7 @@ export default function Questions() {
       .from("questions")
       .select("*")
       .eq("published", true)
-      .in("subject_id", pickedSubjects);
+      .in("subject_id", effectiveSubjectIds);
     setStarting(false);
     if (error || !data || data.length === 0) {
       setSetupError("Could not load questions. Try again.");
@@ -279,13 +280,14 @@ export default function Questions() {
       <Setup
         loadingMeta={loadingMeta}
         systems={systems}
-        systemId={systemId}
-        pickSystem={pickSystem}
-        subjectsInSystem={subjectsInSystem}
         subjects={subjects}
-        noSystems={!loadingMeta && systems.length === 0}
+        counts={counts}
+        pickedSystems={pickedSystems}
         pickedSubjects={pickedSubjects}
+        toggleSystem={toggleSystem}
         toggleSubject={toggleSubject}
+        toggleAllSystems={toggleAllSystems}
+        toggleAllSubjects={toggleAllSubjects}
         numQuestions={numQuestions}
         setNumQuestions={setNumQuestions}
         availableCount={availableCount}
@@ -648,119 +650,51 @@ export default function Questions() {
 /* ================================================================== */
 function Setup(props) {
   const {
-    loadingMeta, systems, systemId, pickSystem, subjectsInSystem,
-    subjects, noSystems,
-    pickedSubjects, toggleSubject, numQuestions, setNumQuestions,
-    availableCount, mode, setMode, startBlock, starting, setupError,
+    loadingMeta, systems, subjects, counts,
+    pickedSystems, pickedSubjects, toggleSystem, toggleSubject,
+    toggleAllSystems, toggleAllSubjects,
+    numQuestions, setNumQuestions, availableCount,
+    mode, setMode, startBlock, starting, setupError,
   } = props;
 
-  // When no systems are configured, skip system selection and offer every
-  // subject directly. Step numbers shift up by one in that case.
-  const subjectList = noSystems ? subjects : subjectsInSystem;
-  const showSubjects = noSystems || !!systemId;
-  let step = 1;
-  const systemStep = noSystems ? null : step++;
-  const subjectStep = step++;
-  const countStep = step++;
-  const modeStep = step;
+  const hasSubjects = pickedSubjects.length > 0;
 
   return (
-    <div style={{ minHeight: "100vh", background: "#F8FAFC", padding: "40px 20px" }}>
-      <div style={{ maxWidth: 820, margin: "0 auto" }}>
-        <h1 style={{ fontSize: 28, margin: "0 0 6px", color: TEXT }}>Create Question Block</h1>
-        <p style={{ color: MUTED, margin: "0 0 28px" }}>
-          {noSystems
-            ? "Choose your subjects and start a UWorld-style block."
-            : "Pick a system, choose your subjects, and start a UWorld-style block."}
+    <div style={{ minHeight: "100vh", background: "#fff", padding: "40px 20px" }}>
+      <div style={{ maxWidth: 880, margin: "0 auto" }}>
+        <h1 style={{ fontSize: 26, margin: "0 0 4px", color: TEXT }}>Create Question Block</h1>
+        <p style={{ color: MUTED, margin: "0 0 28px", fontSize: 14 }}>
+          Select systems and subjects to build your block.
         </p>
 
         {loadingMeta ? (
           <p style={{ color: MUTED }}>Loading…</p>
         ) : (
           <>
-            {noSystems && (
-              <div
-                style={{
-                  background: BLUE_SOFT,
-                  border: "1px solid #BFDBFE",
-                  color: "#1E40AF",
-                  borderRadius: 10,
-                  padding: "10px 14px",
-                  fontSize: 13,
-                  marginBottom: 22,
-                }}
-              >
-                No systems configured yet — showing all subjects.
-              </div>
-            )}
+            <FilterSection
+              title="Systems"
+              items={systems}
+              picked={pickedSystems}
+              counts={counts.bySystem}
+              onToggle={toggleSystem}
+              onToggleAll={toggleAllSystems}
+              emptyText="No systems configured yet."
+            />
 
-            {/* STEP — SYSTEM (only when systems exist) */}
-            {!noSystems && (
-              <Section n={systemStep} title="Choose a system">
-                {systems.length === 0 ? (
-                  <Empty>No systems yet. Add them from the Admin panel.</Empty>
-                ) : (
-                  <div style={cardGrid}>
-                    {systems.map((s) => (
-                      <button
-                        key={s.id}
-                        onClick={() => pickSystem(s.id)}
-                        style={{
-                          ...selectCard,
-                          border: `2px solid ${systemId === s.id ? BLUE : BORDER}`,
-                          background: systemId === s.id ? BLUE_SOFT : "#fff",
-                        }}
-                      >
-                        <span style={{ width: 12, height: 12, borderRadius: "50%", background: s.color || BLUE }} />
-                        {s.name}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </Section>
-            )}
+            <FilterSection
+              title="Subjects"
+              items={subjects}
+              picked={pickedSubjects}
+              counts={counts.bySubject}
+              onToggle={toggleSubject}
+              onToggleAll={toggleAllSubjects}
+              emptyText="No subjects available yet."
+            />
 
-            {/* STEP — SUBJECTS */}
-            {showSubjects && (
-              <Section n={subjectStep} title="Choose subject(s)">
-                {subjectList.length === 0 ? (
-                  <Empty>{noSystems ? "No subjects available yet. Add some from the Admin panel." : "No subjects linked to this system yet."}</Empty>
-                ) : (
-                  <div style={cardGrid}>
-                    {subjectList.map((s) => {
-                      const on = pickedSubjects.includes(s.id);
-                      return (
-                        <button
-                          key={s.id}
-                          onClick={() => toggleSubject(s.id)}
-                          style={{
-                            ...selectCard,
-                            border: `2px solid ${on ? BLUE : BORDER}`,
-                            background: on ? BLUE_SOFT : "#fff",
-                          }}
-                        >
-                          <span
-                            style={{
-                              width: 18, height: 18, borderRadius: 5, flexShrink: 0,
-                              border: `2px solid ${on ? BLUE : "#CBD5E1"}`,
-                              background: on ? BLUE : "#fff",
-                              color: "#fff", fontSize: 12, lineHeight: "14px", textAlign: "center",
-                            }}
-                          >
-                            {on ? "✓" : ""}
-                          </span>
-                          {s.name}
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </Section>
-            )}
-
-            {/* STEP — COUNT */}
-            {pickedSubjects.length > 0 && (
-              <Section n={countStep} title="Number of questions">
+            {/* COUNT */}
+            {hasSubjects && (
+              <div style={{ marginBottom: 28 }}>
+                <h3 style={{ margin: "0 0 12px", fontSize: 16, color: TEXT }}>Number of questions</h3>
                 <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
                   <input
                     type="number"
@@ -768,55 +702,50 @@ function Setup(props) {
                     max={availableCount}
                     value={numQuestions}
                     onChange={(e) => setNumQuestions(Number(e.target.value))}
-                    style={{
-                      width: 110, padding: "10px 12px", fontSize: 16,
-                      border: `1px solid ${BORDER}`, borderRadius: 8,
-                    }}
+                    style={{ width: 110, padding: "10px 12px", fontSize: 16, border: `1px solid ${BORDER}`, borderRadius: 8 }}
                   />
                   <span style={{ color: MUTED }}>
                     {availableCount} question{availableCount === 1 ? "" : "s"} available
                   </span>
                 </div>
-              </Section>
+              </div>
             )}
 
-            {/* STEP — MODE */}
-            {pickedSubjects.length > 0 && (
-              <Section n={modeStep} title="Choose mode">
+            {/* MODE */}
+            {hasSubjects && (
+              <div style={{ marginBottom: 28 }}>
+                <h3 style={{ margin: "0 0 12px", fontSize: 16, color: TEXT }}>Mode</h3>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
                   <ModeCard
                     active={mode === "tutor"}
                     onClick={() => setMode("tutor")}
-                    icon="🎓"
                     title="Tutor Mode"
                     desc="See the explanation right after each question."
                   />
                   <ModeCard
                     active={mode === "timed"}
                     onClick={() => setMode("timed")}
-                    icon="⏱"
                     title="Timed Mode"
                     desc={`${Math.round((Math.min(numQuestions, availableCount) * SECONDS_PER_Q) / 60)} min for the block · explanations at the end.`}
                   />
                 </div>
-              </Section>
+              </div>
             )}
 
-            {setupError && (
-              <p style={{ color: RED, marginTop: 8 }}>{setupError}</p>
-            )}
+            {setupError && <p style={{ color: RED, marginTop: 8 }}>{setupError}</p>}
 
-            {pickedSubjects.length > 0 && (
+            {hasSubjects && (
               <button
                 onClick={startBlock}
                 disabled={starting || availableCount === 0}
                 style={{
                   ...primaryBtn,
                   width: "100%",
-                  marginTop: 24,
+                  marginTop: 12,
                   padding: "16px",
                   fontSize: 17,
-                  opacity: starting ? 0.7 : 1,
+                  opacity: starting || availableCount === 0 ? 0.6 : 1,
+                  cursor: starting || availableCount === 0 ? "not-allowed" : "pointer",
                 }}
               >
                 {starting ? "Building block…" : "Create Block"}
@@ -826,6 +755,103 @@ function Setup(props) {
         )}
       </div>
     </div>
+  );
+}
+
+/* UWorld-style filter list: master toggle + "(picked/total)" + 3-col rows. */
+function FilterSection({ title, items, picked, counts, onToggle, onToggleAll, emptyText }) {
+  const allOn = items.length > 0 && picked.length === items.length;
+  return (
+    <div style={{ marginBottom: 30 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
+        <Toggle on={allOn} onClick={onToggleAll} />
+        <strong style={{ fontSize: 16, color: TEXT }}>
+          {title} ({picked.length}/{items.length})
+        </strong>
+      </div>
+      {items.length === 0 ? (
+        <Empty>{emptyText}</Empty>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
+          {items.map((it) => {
+            const on = picked.includes(it.id);
+            return (
+              <button
+                key={it.id}
+                onClick={() => onToggle(it.id)}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 12,
+                  padding: "12px 14px",
+                  border: `1px solid ${BORDER}`,
+                  borderRadius: 8,
+                  background: "#fff",
+                  cursor: "pointer",
+                  textAlign: "left",
+                  width: "100%",
+                }}
+              >
+                <Checkbox on={on} />
+                <span style={{ flex: 1, minWidth: 0, fontSize: 14, color: TEXT, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {it.name}
+                </span>
+                <span style={{ color: BLUE, fontWeight: 700, fontSize: 14, width: 40, textAlign: "right", flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>
+                  {counts[it.id] || 0}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Toggle({ on, onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      role="switch"
+      aria-checked={on}
+      style={{
+        width: 38,
+        height: 22,
+        borderRadius: 999,
+        border: "none",
+        cursor: "pointer",
+        background: on ? BLUE : "#CBD5E1",
+        position: "relative",
+        padding: 0,
+        flexShrink: 0,
+        transition: "background .15s",
+      }}
+    >
+      <span style={{ position: "absolute", top: 2, left: on ? 18 : 2, width: 18, height: 18, borderRadius: "50%", background: "#fff", transition: "left .15s" }} />
+    </button>
+  );
+}
+
+function Checkbox({ on }) {
+  return (
+    <span
+      style={{
+        width: 18,
+        height: 18,
+        borderRadius: 3,
+        flexShrink: 0,
+        border: `1.5px solid ${on ? BLUE : "#CBD5E1"}`,
+        background: on ? BLUE : "#fff",
+        color: "#fff",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        fontSize: 12,
+        fontWeight: 800,
+      }}
+    >
+      {on ? "✓" : ""}
+    </span>
   );
 }
 
@@ -951,44 +977,17 @@ const ghostBtn = {
   background: "#fff", color: TEXT, border: `1px solid ${BORDER}`, borderRadius: 10,
   padding: "10px 18px", fontWeight: 600, fontSize: 14, cursor: "pointer",
 };
-const selectCard = {
-  display: "flex", alignItems: "center", gap: 10, padding: "14px 16px",
-  borderRadius: 10, cursor: "pointer", fontSize: 15, fontWeight: 600,
-  color: TEXT, textAlign: "left",
-};
-const cardGrid = { display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(180px,1fr))", gap: 12 };
-
-function Section({ n, title, children }) {
-  return (
-    <div style={{ marginBottom: 24 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
-        <span
-          style={{
-            width: 26, height: 26, borderRadius: "50%", background: NAVY, color: "#fff",
-            display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 700,
-          }}
-        >
-          {n}
-        </span>
-        <h3 style={{ margin: 0, fontSize: 17 }}>{title}</h3>
-      </div>
-      {children}
-    </div>
-  );
-}
-
-function ModeCard({ active, onClick, icon, title, desc }) {
+function ModeCard({ active, onClick, title, desc }) {
   return (
     <button
       onClick={onClick}
       style={{
-        textAlign: "left", padding: "16px 18px", borderRadius: 12, cursor: "pointer",
-        border: `2px solid ${active ? BLUE : BORDER}`,
-        background: active ? BLUE_SOFT : "#fff",
+        textAlign: "left", padding: "16px 18px", borderRadius: 10, cursor: "pointer",
+        border: `1.5px solid ${active ? BLUE : BORDER}`,
+        background: "#fff",
       }}
     >
-      <div style={{ fontSize: 22 }}>{icon}</div>
-      <div style={{ fontWeight: 700, marginTop: 6, color: TEXT }}>{title}</div>
+      <div style={{ fontWeight: 700, color: TEXT }}>{title}</div>
       <div style={{ fontSize: 13, color: MUTED, marginTop: 4, lineHeight: 1.5 }}>{desc}</div>
     </button>
   );

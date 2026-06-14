@@ -6,11 +6,11 @@ import { supabase } from "../lib/supabase";
 
 const navItems = [
   { to: "/app/home", icon: "⊞", label: "Dashboard" },
-  { to: "/app/questions", icon: "📋", label: "Question Bank" },
-  { to: "/app/flashcards", icon: "🃏", label: "Flashcards" },
-  { to: "/app/subjects", icon: "📚", label: "Subjects" },
-  { to: "/app/leaderboard", icon: "🏆", label: "Leaderboard" },
-  { to: "/app/profile", icon: "👤", label: "Profile" },
+  { to: "/app/questions", icon: "☰", label: "Question Bank" },
+  { to: "/app/flashcards", icon: "▣", label: "Flashcards" },
+  { to: "/app/subjects", icon: "◈", label: "Subjects" },
+  { to: "/app/leaderboard", icon: "≡", label: "Leaderboard" },
+  { to: "/app/profile", icon: "○", label: "Profile" },
 ];
 
 // Shared so the Admin link (rendered separately) matches the mapped links exactly.
@@ -113,7 +113,7 @@ export default function Layout() {
           ))}
           {isAdmin && (
             <NavLink to="/app/admin" style={navLinkStyle}>
-              <span style={{ fontSize: 16 }}>⚙️</span>
+              <span style={{ fontSize: 16 }}>⚙</span>
               Admin
             </NavLink>
           )}
