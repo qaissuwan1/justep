@@ -11,17 +11,45 @@ const navItems = [
   { to: "/app/subjects", icon: "📚", label: "Subjects" },
   { to: "/app/leaderboard", icon: "🏆", label: "Leaderboard" },
   { to: "/app/profile", icon: "👤", label: "Profile" },
-  { to: "/app/admin", icon: "⚙️", label: "Admin" },
 ];
+
+// Shared so the Admin link (rendered separately) matches the mapped links exactly.
+const navLinkStyle = ({ isActive }) => ({
+  width: "100%",
+  display: "flex",
+  alignItems: "center",
+  gap: 12,
+  padding: "11px 14px",
+  borderRadius: 10,
+  marginBottom: 4,
+  textDecoration: "none",
+  background: isActive ? "rgba(79,142,247,0.18)" : "transparent",
+  color: isActive ? colors.blue : "rgba(255,255,255,0.55)",
+  fontSize: 14,
+  fontWeight: isActive ? 600 : 400,
+  transition: "all 0.15s",
+});
 
 export default function Layout() {
   const navigate = useNavigate();
   const [user, setUser] = useState(null);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   useEffect(() => {
-    supabase.auth.getUser().then(({ data }) => setUser(data.user));
+    // Resolve the user, then look up their role to decide if the Admin link shows.
+    const applyUser = async (u) => {
+      setUser(u);
+      if (!u) {
+        setIsAdmin(false);
+        return;
+      }
+      const { data: profile } = await supabase.from("profiles").select("role").eq("id", u.id).maybeSingle();
+      setIsAdmin(profile?.role === "admin");
+    };
+
+    supabase.auth.getUser().then(({ data }) => applyUser(data.user));
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
+      applyUser(session?.user ?? null);
     });
     return () => listener.subscription.unsubscribe();
   }, []);
@@ -78,29 +106,17 @@ export default function Layout() {
         {/* Nav */}
         <nav style={{ flex: 1, padding: "0 12px", overflowY: "auto" }}>
           {navItems.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              style={({ isActive }) => ({
-                width: "100%",
-                display: "flex",
-                alignItems: "center",
-                gap: 12,
-                padding: "11px 14px",
-                borderRadius: 10,
-                marginBottom: 4,
-                textDecoration: "none",
-                background: isActive ? "rgba(79,142,247,0.18)" : "transparent",
-                color: isActive ? colors.blue : "rgba(255,255,255,0.55)",
-                fontSize: 14,
-                fontWeight: isActive ? 600 : 400,
-                transition: "all 0.15s",
-              })}
-            >
+            <NavLink key={item.to} to={item.to} style={navLinkStyle}>
               <span style={{ fontSize: 16 }}>{item.icon}</span>
               {item.label}
             </NavLink>
           ))}
+          {isAdmin && (
+            <NavLink to="/app/admin" style={navLinkStyle}>
+              <span style={{ fontSize: 16 }}>⚙️</span>
+              Admin
+            </NavLink>
+          )}
         </nav>
 
         {/* User + logout */}
