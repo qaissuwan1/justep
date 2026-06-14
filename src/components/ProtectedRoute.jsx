@@ -44,7 +44,6 @@ export default function ProtectedRoute({ children }) {
           fontSize: 14,
         }}
       >
-        <style>{`@keyframes ju-spin{to{transform:rotate(360deg)}}`}</style>
         <div
           style={{
             width: 42,
@@ -52,7 +51,7 @@ export default function ProtectedRoute({ children }) {
             borderRadius: "50%",
             border: `3px solid ${colors.line}`,
             borderTopColor: colors.blue,
-            animation: "ju-spin 0.7s linear infinite",
+            animation: "spin 0.7s linear infinite",
           }}
         />
         Checking your session…

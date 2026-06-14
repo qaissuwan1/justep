@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { colors, gradients, font } from "../theme";
 import { Card, Pill, ProgressBar, PrimaryButton, StatCard } from "../components/ui";
+import StudentAnalytics from "../components/StudentAnalytics";
+import { computeStreak, dayKey } from "../lib/progress";
 
 // Bootstrap allowlist so the panel is reachable before any profile has role='admin'.
 // Primary gate is profiles.role === 'admin' (see migration 003).
@@ -63,8 +65,7 @@ function FieldLabel({ children }) {
 function Spinner({ label = "Loading…" }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 14, padding: "60px 0", color: colors.textSoft, fontSize: 14 }}>
-      <style>{`@keyframes ju-spin{to{transform:rotate(360deg)}}`}</style>
-      <div style={{ width: 38, height: 38, borderRadius: "50%", border: `3px solid ${colors.line}`, borderTopColor: colors.blue, animation: "ju-spin 0.7s linear infinite" }} />
+      <div style={{ width: 38, height: 38, borderRadius: "50%", border: `3px solid ${colors.line}`, borderTopColor: colors.blue, animation: "spin 0.7s linear infinite" }} />
       {label}
     </div>
   );
@@ -1171,17 +1172,39 @@ function ManageSystems() {
 // ════════════════════════════════════════════════════════════════════════════
 function UserManagement() {
   const [rows, setRows] = useState([]);
+  const [statsByUser, setStatsByUser] = useState({});
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
   const [query, setQuery] = useState("");
+  const [selected, setSelected] = useState(null); // profile being inspected
 
   useEffect(() => {
     let active = true;
     (async () => {
-      const { data, error } = await supabase.from("profiles").select("*").order("created_at", { ascending: false });
+      const [profilesRes, progressRes] = await Promise.all([
+        supabase.from("profiles").select("*").order("created_at", { ascending: false }),
+        supabase.from("user_progress").select("user_id, is_correct, answered_at"),
+      ]);
       if (!active) return;
-      if (error) setErr(error.message);
-      else setRows(data || []);
+      if (profilesRes.error) setErr(profilesRes.error.message);
+      else {
+        setErr("");
+        setRows(profilesRes.data || []);
+      }
+      // Aggregate progress per user (admin can read all rows via migration 006).
+      const agg = {};
+      (progressRes.data || []).forEach((r) => {
+        const a = agg[r.user_id] || { total: 0, correct: 0, days: new Set() };
+        a.total++;
+        if (r.is_correct) a.correct++;
+        a.days.add(dayKey(r.answered_at));
+        agg[r.user_id] = a;
+      });
+      const byUser = {};
+      Object.entries(agg).forEach(([uid, a]) => {
+        byUser[uid] = { total: a.total, accuracy: a.total ? Math.round((a.correct / a.total) * 100) : 0, streak: computeStreak(a.days) };
+      });
+      setStatsByUser(byUser);
       setLoading(false);
     })();
     return () => {
@@ -1195,9 +1218,24 @@ function UserManagement() {
     return rows.filter((r) => (r.full_name || "").toLowerCase().includes(q) || (r.email || "").toLowerCase().includes(q));
   }, [rows, query]);
 
+  // Detail view — identical layout to the student dashboard.
+  if (selected) {
+    return (
+      <>
+        <button
+          onClick={() => setSelected(null)}
+          style={{ ...iconBtn, padding: "9px 16px", fontSize: 14, marginBottom: 18 }}
+        >
+          ← Back to users
+        </button>
+        <StudentAnalytics userId={selected.id} mode="admin" />
+      </>
+    );
+  }
+
   return (
     <>
-      <AdminHeader title="User Management" subtitle={`${rows.length} registered user${rows.length === 1 ? "" : "s"}`} />
+      <AdminHeader title="User Management" subtitle={`${rows.length} registered user${rows.length === 1 ? "" : "s"} · click a row for full analytics`} />
       {err && <Banner>{err}</Banner>}
 
       <div style={{ marginBottom: 16 }}>
@@ -1216,28 +1254,48 @@ function UserManagement() {
                 <tr style={{ background: "#F8FAFF" }}>
                   <th style={th}>User</th>
                   <th style={th}>Email</th>
+                  <th style={th}>Questions</th>
+                  <th style={th}>Accuracy</th>
                   <th style={th}>Streak</th>
-                  <th style={th}>Questions answered</th>
                   <th style={th}>Joined</th>
+                  <th style={th} />
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((u) => (
-                  <tr key={u.id}>
-                    <td style={td}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                        <div style={{ width: 34, height: 34, borderRadius: "50%", background: "#EEF2FB", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 700, color: colors.textSoft }}>
-                          {(u.full_name || u.email || "?")[0]?.toUpperCase()}
+                {filtered.map((u) => {
+                  const st = statsByUser[u.id];
+                  const answered = st?.total || 0;
+                  return (
+                    <tr
+                      key={u.id}
+                      onClick={() => setSelected(u)}
+                      style={{ cursor: "pointer" }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = "#F8FAFF")}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                    >
+                      <td style={td}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                          <div style={{ width: 34, height: 34, borderRadius: "50%", background: "#EEF2FB", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 700, color: colors.textSoft }}>
+                            {(u.full_name || u.email || "?")[0]?.toUpperCase()}
+                          </div>
+                          <span style={{ fontWeight: 600 }}>{u.full_name || "—"}</span>
                         </div>
-                        <span style={{ fontWeight: 600 }}>{u.full_name || "—"}</span>
-                      </div>
-                    </td>
-                    <td style={{ ...td, color: colors.textSoft }}>{u.email}</td>
-                    <td style={td}>🔥 {u.streak ?? 0}</td>
-                    <td style={td}>{u.total_questions_answered ?? 0}</td>
-                    <td style={{ ...td, color: colors.textMuted }}>{u.created_at ? new Date(u.created_at).toLocaleDateString() : "—"}</td>
-                  </tr>
-                ))}
+                      </td>
+                      <td style={{ ...td, color: colors.textSoft }}>{u.email}</td>
+                      <td style={td}>{answered}</td>
+                      <td style={td}>
+                        {answered ? (
+                          <span style={{ fontWeight: 700, color: st.accuracy >= 70 ? colors.green : st.accuracy >= 50 ? colors.amber : colors.red }}>{st.accuracy}%</span>
+                        ) : (
+                          <span style={{ color: colors.textMuted }}>—</span>
+                        )}
+                      </td>
+                      <td style={td}>🔥 {st?.streak || 0}</td>
+                      <td style={{ ...td, color: colors.textMuted }}>{u.created_at ? new Date(u.created_at).toLocaleDateString() : "—"}</td>
+                      <td style={{ ...td, textAlign: "right", color: colors.blue, fontWeight: 600, whiteSpace: "nowrap" }}>View →</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
