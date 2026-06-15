@@ -1,4 +1,6 @@
-// Split-screen auth layout: navy branding panel + form card.
+// Split-screen auth layout: navy branding panel + form card, plus the shared
+// form primitives used by both Login and Signup (Field, Divider, GoogleButton,
+// Banner, SubmitButton).
 import { Link } from "react-router-dom";
 import { colors, gradients, font } from "../theme";
 
@@ -40,6 +42,21 @@ export function AuthShell({ children, side }) {
           </span>
         </Link>
         <div>
+          {side?.eyebrow && (
+            <span
+              style={{
+                display: "inline-block",
+                fontSize: 12,
+                fontWeight: 700,
+                letterSpacing: "0.1em",
+                textTransform: "uppercase",
+                color: colors.teal,
+                marginBottom: 14,
+              }}
+            >
+              {side.eyebrow}
+            </span>
+          )}
           <h2 style={{ fontSize: 34, fontWeight: 800, lineHeight: 1.2, margin: "0 0 16px", letterSpacing: "-0.5px" }}>
             {side?.title || "Study smarter, not harder."}
           </h2>
@@ -59,31 +76,176 @@ export function AuthShell({ children, side }) {
   );
 }
 
-export function Field({ label, type = "text", value, onChange, placeholder, required }) {
+export function Field({
+  label,
+  type = "text",
+  value,
+  onChange,
+  onBlur,
+  placeholder,
+  required,
+  autoComplete,
+  name,
+  hint,
+  error,
+}) {
+  const restingBorder = error ? colors.red : colors.line;
   return (
     <label style={{ display: "block", marginBottom: 16 }}>
-      <span style={{ fontSize: 13, fontWeight: 600, color: colors.text, display: "block", marginBottom: 6 }}>{label}</span>
+      <span style={{ fontSize: 13, fontWeight: 600, color: colors.text, display: "block", marginBottom: 6 }}>
+        {label}
+        {required && <span style={{ color: colors.red }}> *</span>}
+      </span>
       <input
         type={type}
+        name={name}
         value={value}
         onChange={onChange}
         placeholder={placeholder}
         required={required}
+        autoComplete={autoComplete}
         style={{
           width: "100%",
           padding: "12px 14px",
           borderRadius: 10,
-          border: `1.5px solid ${colors.line}`,
+          border: `1.5px solid ${restingBorder}`,
           fontSize: 14,
           fontFamily: font,
           outline: "none",
           color: colors.text,
           background: "#fff",
           transition: "border 0.15s",
+          boxSizing: "border-box",
         }}
         onFocus={(e) => (e.target.style.border = `1.5px solid ${colors.blue}`)}
-        onBlur={(e) => (e.target.style.border = `1.5px solid ${colors.line}`)}
+        onBlur={(e) => {
+          e.target.style.border = `1.5px solid ${restingBorder}`;
+          onBlur?.(e);
+        }}
       />
+      {error ? (
+        <span style={{ fontSize: 12, color: colors.red, display: "block", marginTop: 6 }}>{error}</span>
+      ) : hint ? (
+        <span style={{ fontSize: 12, color: colors.textMuted, display: "block", marginTop: 6 }}>{hint}</span>
+      ) : null}
     </label>
+  );
+}
+
+export function Banner({ type = "error", children }) {
+  const palette = {
+    error: { background: "#FEF2F2", border: "#FECACA", color: "#991B1B" },
+    success: { background: "#ECFDF5", border: "#BBF7D0", color: "#065F46" },
+  };
+  const s = palette[type] || palette.error;
+  return (
+    <div
+      role={type === "error" ? "alert" : "status"}
+      style={{
+        background: s.background,
+        border: `1.5px solid ${s.border}`,
+        color: s.color,
+        borderRadius: 10,
+        padding: "11px 14px",
+        fontSize: 13,
+        marginBottom: 18,
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+export function Divider({ label = "or" }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 12, margin: "24px 0" }}>
+      <div style={{ flex: 1, height: 1, background: colors.line }} />
+      <span style={{ fontSize: 12, color: colors.textMuted }}>{label}</span>
+      <div style={{ flex: 1, height: 1, background: colors.line }} />
+    </div>
+  );
+}
+
+function Spinner({ size = 16, light }) {
+  return (
+    <span
+      style={{
+        width: size,
+        height: size,
+        borderRadius: "50%",
+        border: `2px solid ${light ? "rgba(255,255,255,0.4)" : colors.line}`,
+        borderTopColor: light ? "#fff" : colors.blue,
+        display: "inline-block",
+        animation: "spin 0.6s linear infinite",
+      }}
+    />
+  );
+}
+
+export function SubmitButton({ loading, loadingLabel, children, disabled }) {
+  const off = loading || disabled;
+  return (
+    <button
+      type="submit"
+      disabled={off}
+      style={{
+        width: "100%",
+        background: gradients.accent,
+        color: "#fff",
+        border: "none",
+        borderRadius: 12,
+        padding: "13px 28px",
+        fontSize: 15,
+        fontWeight: 700,
+        cursor: off ? "not-allowed" : "pointer",
+        opacity: off ? 0.7 : 1,
+        letterSpacing: "0.02em",
+        boxShadow: "0 4px 16px rgba(79,142,247,0.35)",
+        fontFamily: font,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 10,
+        transition: "opacity 0.15s",
+      }}
+    >
+      {loading && <Spinner light />}
+      {loading ? loadingLabel : children}
+    </button>
+  );
+}
+
+export function GoogleButton({ onClick, label, disabled }) {
+  return (
+    <button
+      onClick={onClick}
+      type="button"
+      disabled={disabled}
+      style={{
+        width: "100%",
+        padding: "12px 0",
+        borderRadius: 10,
+        border: `1.5px solid ${colors.line}`,
+        background: "#fff",
+        fontSize: 14,
+        fontWeight: 600,
+        color: colors.text,
+        cursor: disabled ? "not-allowed" : "pointer",
+        opacity: disabled ? 0.6 : 1,
+        fontFamily: font,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 10,
+      }}
+    >
+      <svg width="18" height="18" viewBox="0 0 18 18">
+        <path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z" />
+        <path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332C2.438 15.983 5.482 18 9 18z" />
+        <path fill="#FBBC05" d="M3.964 10.71c-.18-.54-.282-1.117-.282-1.71s.102-1.17.282-1.71V4.958H.957C.347 6.173 0 7.548 0 9s.348 2.827.957 4.042l3.007-2.332z" />
+        <path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0 5.482 0 2.438 2.017.957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z" />
+      </svg>
+      {label}
+    </button>
   );
 }

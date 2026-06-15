@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { AuthShell, Field } from "../components/AuthShell";
-import { colors, font } from "../theme";
-import { PrimaryButton } from "../components/ui";
-import { supabase } from "../lib/supabase";
+import { AuthShell, Field, Divider, GoogleButton, Banner, SubmitButton } from "../components/AuthShell";
+import { colors } from "../theme";
+import { supabase, setRememberMe } from "../lib/supabase";
+import { friendlyAuthError, isValidEmail } from "../lib/auth";
 
 const universities = ["University of Jordan", "JUST", "Hashemite University", "Mutah University", "Yarmouk University"];
 const years = ["1st Year", "2nd Year", "3rd Year", "4th Year", "5th Year", "6th Year"];
@@ -13,26 +13,44 @@ export default function Signup() {
   const [form, setForm] = useState({ name: "", email: "", password: "", university: universities[0], year: years[1] });
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [fieldError, setFieldError] = useState({});
   const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
 
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
+
+  const validate = () => {
+    const errs = {};
+    if (!form.name.trim()) errs.name = "Please enter your full name.";
+    if (!isValidEmail(form.email)) errs.email = "Enter a valid email address.";
+    if (form.password.length < 8) errs.password = "Password must be at least 8 characters.";
+    return errs;
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError("");
     setNotice("");
+
+    const errs = validate();
+    setFieldError(errs);
+    if (Object.keys(errs).length) return;
+
     setLoading(true);
+    setRememberMe(true); // new accounts persist by default
     const { data, error } = await supabase.auth.signUp({
-      email: form.email,
+      email: form.email.trim(),
       password: form.password,
       options: {
-        data: { full_name: form.name, university: form.university, year: form.year },
+        // full_name is read by the handle_new_user trigger to populate profiles.
+        data: { full_name: form.name.trim(), university: form.university, year: form.year },
         emailRedirectTo: `${window.location.origin}/app/home`,
       },
     });
     setLoading(false);
+
     if (error) {
-      setError(error.message);
+      setError(friendlyAuthError(error));
       return;
     }
     if (data.session) {
@@ -40,18 +58,27 @@ export default function Signup() {
       navigate("/app/home");
     } else {
       // Email confirmation required — no session until they verify.
-      setNotice("Almost there! Check your email to confirm your account, then log in.");
+      setNotice("Account created! Check your email to confirm your account, then sign in.");
     }
   };
 
   const handleGoogle = async () => {
     setError("");
+    setNotice("");
+    setGoogleLoading(true);
+    setRememberMe(true); // full_name comes from Google automatically
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "google",
       options: { redirectTo: `${window.location.origin}/app/home` },
     });
-    if (error) setError(error.message);
+    if (error) {
+      setError(friendlyAuthError(error));
+      setGoogleLoading(false);
+    }
   };
+
+  const busy = loading || googleLoading;
+  const passwordTooShort = form.password.length > 0 && form.password.length < 8;
 
   const selectStyle = {
     width: "100%",
@@ -62,59 +89,66 @@ export default function Signup() {
     outline: "none",
     color: colors.text,
     background: "#fff",
+    boxSizing: "border-box",
   };
 
   return (
     <AuthShell
       side={{
+        eyebrow: "Get started",
         title: "Start your journey.",
         subtitle: "Join thousands of medical students mastering their exams with JUstep.",
       }}
     >
       <h1 style={{ fontSize: 26, fontWeight: 800, margin: "0 0 6px", color: colors.text }}>Create your account</h1>
       <p style={{ fontSize: 14, color: colors.textSoft, margin: "0 0 28px" }}>
-        Already have one?{" "}
+        Already have an account?{" "}
         <Link to="/login" style={{ color: colors.blue, fontWeight: 600, textDecoration: "none" }}>
-          Log in
+          Sign in
         </Link>
       </p>
 
-      {error && (
-        <div
-          style={{
-            background: "#FEF2F2",
-            border: `1.5px solid #FECACA`,
-            color: "#991B1B",
-            borderRadius: 10,
-            padding: "11px 14px",
-            fontSize: 13,
-            marginBottom: 18,
-          }}
-        >
-          {error}
-        </div>
-      )}
+      {error && <Banner type="error">{error}</Banner>}
+      {notice && <Banner type="success">{notice}</Banner>}
 
-      {notice && (
-        <div
-          style={{
-            background: "#ECFDF5",
-            border: `1.5px solid #BBF7D0`,
-            color: "#065F46",
-            borderRadius: 10,
-            padding: "11px 14px",
-            fontSize: 13,
-            marginBottom: 18,
-          }}
-        >
-          {notice}
-        </div>
-      )}
-
-      <form onSubmit={handleSubmit}>
-        <Field label="Full name" value={form.name} onChange={set("name")} placeholder="Qais Suwan" required />
-        <Field label="Email" type="email" value={form.email} onChange={set("email")} placeholder="you@ju.edu.jo" required />
-        <Field label="Password" type="password" value={form.password} onChange={set("password")} placeholder="At least 8 characters" required />
+      <form onSubmit={handleSubmit} noValidate>
+        <Field
+          label="Full name"
+          name="name"
+          autoComplete="name"
+          value={form.name}
+          onChange={set("name")}
+          onBlur={() => setFieldError((p) => ({ ...p, name: !form.name.trim() ? "Please enter your full name." : undefined }))}
+          placeholder="Qais Suwan"
+          required
+          error={fieldError.name}
+        />
+        <Field
+          label="Email"
+          type="email"
+          name="email"
+          autoComplete="email"
+          value={form.email}
+          onChange={set("email")}
+          onBlur={() =>
+            setFieldError((p) => ({ ...p, email: form.email && !isValidEmail(form.email) ? "Enter a valid email address." : undefined }))
+          }
+          placeholder="you@ju.edu.jo"
+          required
+          error={fieldError.email}
+        />
+        <Field
+          label="Password"
+          type="password"
+          name="password"
+          autoComplete="new-password"
+          value={form.password}
+          onChange={set("password")}
+          placeholder="At least 8 characters"
+          required
+          error={fieldError.password || (passwordTooShort ? "Password must be at least 8 characters." : undefined)}
+          hint="Use at least 8 characters."
+        />
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 22 }}>
           <label style={{ display: "block" }}>
@@ -143,44 +177,14 @@ export default function Signup() {
           </span>
         </label>
 
-        <PrimaryButton type="submit" full style={loading ? { opacity: 0.7, pointerEvents: "none" } : undefined}>
-          {loading ? "Creating account…" : "Create account →"}
-        </PrimaryButton>
+        <SubmitButton loading={loading} loadingLabel="Creating account…" disabled={busy}>
+          Create account
+        </SubmitButton>
       </form>
 
-      <div style={{ display: "flex", alignItems: "center", gap: 12, margin: "24px 0" }}>
-        <div style={{ flex: 1, height: 1, background: colors.line }} />
-        <span style={{ fontSize: 12, color: colors.textMuted }}>or</span>
-        <div style={{ flex: 1, height: 1, background: colors.line }} />
-      </div>
+      <Divider />
 
-      <button
-        onClick={handleGoogle}
-        style={{
-          width: "100%",
-          padding: "12px 0",
-          borderRadius: 10,
-          border: `1.5px solid ${colors.line}`,
-          background: "#fff",
-          fontSize: 14,
-          fontWeight: 600,
-          color: colors.text,
-          cursor: "pointer",
-          fontFamily: font,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          gap: 10,
-        }}
-      >
-        <svg width="18" height="18" viewBox="0 0 18 18">
-          <path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z" />
-          <path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332C2.438 15.983 5.482 18 9 18z" />
-          <path fill="#FBBC05" d="M3.964 10.71c-.18-.54-.282-1.117-.282-1.71s.102-1.17.282-1.71V4.958H.957C.347 6.173 0 7.548 0 9s.348 2.827.957 4.042l3.007-2.332z" />
-          <path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0 5.482 0 2.438 2.017.957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z" />
-        </svg>
-        Sign up with Google
-      </button>
+      <GoogleButton onClick={handleGoogle} label="Sign up with Google" disabled={busy} />
     </AuthShell>
   );
 }
