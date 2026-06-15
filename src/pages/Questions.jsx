@@ -22,6 +22,8 @@ const TEAL_SOFT = "#F0FDFA";
 const BORDER = "#E2E8F0";
 const TEXT = "#0F172A";
 const MUTED = "#64748B";
+const HEAD = "#1a2b4a"; // section-header navy
+const PILL_BORDER = "#BFD7F5"; // count-pill light-blue border
 
 const LETTERS = ["A", "B", "C", "D", "E"];
 const SECONDS_PER_Q = 90;
@@ -41,19 +43,26 @@ function fmtTime(s) {
   return `${m}:${String(sec).padStart(2, "0")}`;
 }
 
+const shortId = (id) => String(id || "").replace(/-/g, "").slice(0, 8).toUpperCase();
+const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+
 export default function Questions() {
   const [phase, setPhase] = useState("setup"); // setup | running | summary
 
   /* -------- shared data -------- */
   const [systems, setSystems] = useState([]);
   const [subjects, setSubjects] = useState([]);
+  const [lectures, setLectures] = useState([]);
+  const [userQ, setUserQ] = useState([]); // [{ id, subject_id, lecture_id, system_id, status }]
+  const [marks, setMarks] = useState(new Set()); // persistent marked question ids
   const [loadingMeta, setLoadingMeta] = useState(true);
 
   /* -------- setup selections -------- */
-  const [pickedSystems, setPickedSystems] = useState([]); // system ids
-  const [pickedSubjects, setPickedSubjects] = useState([]); // subject ids
-  const [counts, setCounts] = useState({ bySubject: {}, bySystem: {} });
-  const [numQuestions, setNumQuestions] = useState(10);
+  const [pickedSystems, setPickedSystems] = useState([]);
+  const [pickedSubjects, setPickedSubjects] = useState([]);
+  const [pickedLectures, setPickedLectures] = useState([]);
+  const [status, setStatus] = useState({ unused: true, incorrect: false, correct: false, marked: false, omitted: false });
+  const [numQuestions, setNumQuestions] = useState(40);
   const [mode, setMode] = useState("tutor"); // tutor | timed
   const [starting, setStarting] = useState(false);
   const [setupError, setSetupError] = useState("");
@@ -66,52 +75,65 @@ export default function Questions() {
   const [struck, setStruck] = useState({}); // qid -> Set(option idx)
   const [flagged, setFlagged] = useState({}); // qid -> true
   const [highlights, setHighlights] = useState({}); // qid -> [{start,end}]
+  const [timeSpent, setTimeSpent] = useState({}); // qid -> seconds
   const [fontSize, setFontSize] = useState(16);
-  const [reviewMode, setReviewMode] = useState(false); // from summary
+  const [reviewMode, setReviewMode] = useState(false); // from results
+  const [splitVertical, setSplitVertical] = useState(false);
+  const [testId, setTestId] = useState("");
+  const [poolLabel, setPoolLabel] = useState("Custom");
 
   /* -------- timer -------- */
   const [timeLeft, setTimeLeft] = useState(0);
   const timerRef = useRef(null);
   const [elapsed, setElapsed] = useState(0);
 
-  const subjectName = (id) => subjects.find((s) => s.id === id)?.name || "—";
-
-  // Effective subjects = picked subjects, optionally constrained to picked systems.
-  const effectiveSubjectIds = pickedSubjects.filter((sid) => {
-    if (pickedSystems.length === 0) return true;
-    const subj = subjects.find((s) => s.id === sid);
-    return subj && pickedSystems.includes(subj.system_id);
-  });
-  const availableCount = effectiveSubjectIds.reduce((sum, sid) => sum + (counts.bySubject[sid] || 0), 0);
-
-  /* ---------------- load systems + subjects ---------------- */
+  /* ---------------- load meta + progress + marks ---------------- */
   useEffect(() => {
     (async () => {
       setLoadingMeta(true);
-      const [{ data: sys }, { data: subj }, { data: qrows }] = await Promise.all([
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      const [{ data: sys }, { data: subj }, { data: lecs }, { data: qrows }, prog, mk] = await Promise.all([
         supabase.from("systems").select("id,name").order("name"),
         supabase.from("subjects").select("id,name,system_id").order("name"),
-        supabase.from("questions").select("subject_id").eq("published", true),
+        supabase.from("lectures").select("id,title,subject_id,order_index").order("order_index"),
+        supabase.from("questions").select("id,subject_id,lecture_id").eq("published", true),
+        user
+          ? supabase.from("user_progress").select("question_id,is_correct,answered_at").eq("user_id", user.id)
+          : Promise.resolve({ data: [] }),
+        user ? supabase.from("question_marks").select("question_id").eq("user_id", user.id) : Promise.resolve({ data: [] }),
       ]);
-      const bySubject = {};
-      (qrows || []).forEach((r) => {
-        if (r.subject_id) bySubject[r.subject_id] = (bySubject[r.subject_id] || 0) + 1;
-      });
+
       const subjList = subj || [];
-      const bySystem = {};
-      subjList.forEach((s) => {
-        if (s.system_id) bySystem[s.system_id] = (bySystem[s.system_id] || 0) + (bySubject[s.id] || 0);
+      const sysOf = {};
+      subjList.forEach((s) => (sysOf[s.id] = s.system_id || null));
+
+      // latest attempt per question decides Unused / Correct / Incorrect
+      const latest = {};
+      (prog.data || []).forEach((p) => {
+        const prev = latest[p.question_id];
+        if (!prev || new Date(p.answered_at) > new Date(prev.answered_at)) latest[p.question_id] = p;
       });
+
+      const uq = (qrows || []).map((q) => {
+        const l = latest[q.id];
+        const st = !l ? "unused" : l.is_correct ? "correct" : "incorrect";
+        return { id: q.id, subject_id: q.subject_id, lecture_id: q.lecture_id || null, system_id: sysOf[q.subject_id] || null, status: st };
+      });
+
       setSystems(sys || []);
       setSubjects(subjList);
-      setCounts({ bySubject, bySystem });
+      setLectures(lecs || []);
+      setUserQ(uq);
+      setMarks(new Set((mk.data || []).map((m) => m.question_id)));
       setLoadingMeta(false);
     })();
   }, []);
 
-  /* ---------------- timer tick ---------------- */
+  /* ---------------- timer tick (timed) ---------------- */
   useEffect(() => {
-    if (phase !== "running" || mode !== "timed") return;
+    if (phase !== "running" || mode !== "timed" || reviewMode) return;
     timerRef.current = setInterval(() => {
       setTimeLeft((t) => {
         if (t <= 1) {
@@ -124,55 +146,59 @@ export default function Questions() {
       setElapsed((e) => e + 1);
     }, 1000);
     return () => clearInterval(timerRef.current);
-  }, [phase, mode]);
+  }, [phase, mode, reviewMode]);
 
   /* ---------------- elapsed for tutor ---------------- */
   useEffect(() => {
-    if (phase !== "running" || mode !== "tutor") return;
+    if (phase !== "running" || mode !== "tutor" || reviewMode) return;
     const t = setInterval(() => setElapsed((e) => e + 1), 1000);
     return () => clearInterval(t);
-  }, [phase, mode]);
+  }, [phase, mode, reviewMode]);
 
-  /* ---------------- setup helpers ---------------- */
-  const toggleSubject = (id) =>
-    setPickedSubjects((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
-  const toggleSystem = (id) =>
-    setPickedSystems((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
-  const toggleAllSubjects = () =>
-    setPickedSubjects((p) => (p.length === subjects.length ? [] : subjects.map((s) => s.id)));
-  const toggleAllSystems = () =>
-    setPickedSystems((p) => (p.length === systems.length ? [] : systems.map((s) => s.id)));
+  /* ---------------- per-question time tracking ---------------- */
+  const current = questions[idx];
+  const currentId = current?.id;
+  useEffect(() => {
+    if (phase !== "running" || reviewMode || !currentId) return;
+    const start = Date.now();
+    return () => {
+      const secs = Math.round((Date.now() - start) / 1000);
+      if (secs > 0) setTimeSpent((ts) => ({ ...ts, [currentId]: (ts[currentId] || 0) + secs }));
+    };
+  }, [currentId, phase, reviewMode]);
 
-  async function startBlock() {
+  /* ---------------- generate block ---------------- */
+  async function startBlock(ids, n) {
     setSetupError("");
-    if (effectiveSubjectIds.length === 0) {
-      setSetupError("Choose at least one subject.");
+    if (!ids.length) {
+      setSetupError("No questions match your filters.");
       return;
     }
-    const n = Math.min(Math.max(1, numQuestions), availableCount);
-    if (n < 1) {
-      setSetupError("No published questions for this selection.");
-      return;
-    }
+    const take = Math.min(Math.max(1, n), ids.length);
     setStarting(true);
-    const { data, error } = await supabase
-      .from("questions")
-      .select("*")
-      .eq("published", true)
-      .in("subject_id", effectiveSubjectIds);
+    const chosenIds = shuffle(ids).slice(0, take);
+    const { data, error } = await supabase.from("questions").select("*").in("id", chosenIds);
     setStarting(false);
     if (error || !data || data.length === 0) {
       setSetupError("Could not load questions. Try again.");
       return;
     }
-    const chosen = shuffle(data).slice(0, n);
+    const chosen = shuffle(data);
+    const flags = {};
+    chosen.forEach((q) => {
+      if (marks.has(q.id)) flags[q.id] = true;
+    });
+    const active = Object.entries(status).filter(([, v]) => v).map(([k]) => cap(k));
+    setPoolLabel(active.length === 1 ? active[0] : active.length ? "Custom" : "Custom");
+    setTestId((typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : String(Math.random())).slice(0, 8));
     setQuestions(chosen);
     setIdx(0);
     setSelected({});
     setSubmitted({});
     setStruck({});
-    setFlagged({});
+    setFlagged(flags);
     setHighlights({});
+    setTimeSpent({});
     setElapsed(0);
     setReviewMode(false);
     if (mode === "timed") setTimeLeft(chosen.length * SECONDS_PER_Q);
@@ -180,19 +206,21 @@ export default function Questions() {
   }
 
   /* ---------------- answering ---------------- */
-  const current = questions[idx];
+  const qid = current?.id;
+  const answered = qid != null && submitted[qid];
+  const reveal = reviewMode || (mode === "tutor" && answered);
 
-  const selectOption = (qid, optIdx) => {
-    if (submitted[qid] || reviewMode) return;
-    setSelected((s) => ({ ...s, [qid]: optIdx }));
+  const selectOption = (id, optIdx) => {
+    if (submitted[id] || reviewMode) return;
+    setSelected((s) => ({ ...s, [id]: optIdx }));
   };
 
-  const toggleStrike = (qid, optIdx) => {
-    if (submitted[qid] || reviewMode) return;
+  const toggleStrike = (id, optIdx) => {
+    if (submitted[id] || reviewMode) return;
     setStruck((s) => {
-      const set = new Set(s[qid] || []);
+      const set = new Set(s[id] || []);
       set.has(optIdx) ? set.delete(optIdx) : set.add(optIdx);
-      return { ...s, [qid]: set };
+      return { ...s, [id]: set };
     });
   };
 
@@ -206,16 +234,26 @@ export default function Questions() {
       data: { user },
     } = await supabase.auth.getUser();
     if (user) {
-      await supabase.from("user_progress").insert({
-        user_id: user.id,
-        question_id: q.id,
-        is_correct: isCorrect,
-      });
+      await supabase.from("user_progress").insert({ user_id: user.id, question_id: q.id, is_correct: isCorrect });
     }
   }
 
-  const toggleFlag = (qid) =>
-    setFlagged((f) => ({ ...f, [qid]: !f[qid] }));
+  // Flag/Mark — persists to question_marks so the "Marked" filter is real.
+  async function toggleFlag(id) {
+    const next = !flagged[id];
+    setFlagged((f) => ({ ...f, [id]: next }));
+    setMarks((m) => {
+      const n = new Set(m);
+      next ? n.add(id) : n.delete(id);
+      return n;
+    });
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) return;
+    if (next) await supabase.from("question_marks").upsert({ user_id: user.id, question_id: id });
+    else await supabase.from("question_marks").delete().eq("user_id", user.id).eq("question_id", id);
+  }
 
   /* ---------------- highlight (session only) ---------------- */
   const stemRef = useRef(null);
@@ -227,7 +265,6 @@ export default function Questions() {
     const range = sel.getRangeAt(0);
     if (!stemRef.current.contains(range.commonAncestorContainer)) return;
 
-    // compute plain-text offsets relative to stem container
     const pre = range.cloneRange();
     pre.selectNodeContents(stemRef.current);
     pre.setEnd(range.startContainer, range.startOffset);
@@ -248,15 +285,13 @@ export default function Questions() {
   };
 
   /* ---------------- navigation ---------------- */
-  const goNext = () => {
-    if (idx < questions.length - 1) setIdx(idx + 1);
-  };
-  const goPrev = () => {
-    if (idx > 0) setIdx(idx - 1);
-  };
+  const goNext = () => idx < questions.length - 1 && setIdx(idx + 1);
+  const goPrev = () => idx > 0 && setIdx(idx - 1);
+  const jumpTo = (i) => i >= 0 && i < questions.length && setIdx(i);
 
   function finishBlock() {
     clearInterval(timerRef.current);
+    setReviewMode(false);
     setPhase("summary");
   }
 
@@ -281,16 +316,19 @@ export default function Questions() {
         loadingMeta={loadingMeta}
         systems={systems}
         subjects={subjects}
-        counts={counts}
+        lectures={lectures}
+        userQ={userQ}
+        marks={marks}
         pickedSystems={pickedSystems}
+        setPickedSystems={setPickedSystems}
         pickedSubjects={pickedSubjects}
-        toggleSystem={toggleSystem}
-        toggleSubject={toggleSubject}
-        toggleAllSystems={toggleAllSystems}
-        toggleAllSubjects={toggleAllSubjects}
+        setPickedSubjects={setPickedSubjects}
+        pickedLectures={pickedLectures}
+        setPickedLectures={setPickedLectures}
+        status={status}
+        setStatus={setStatus}
         numQuestions={numQuestions}
         setNumQuestions={setNumQuestions}
-        availableCount={availableCount}
         mode={mode}
         setMode={setMode}
         startBlock={startBlock}
@@ -301,639 +339,744 @@ export default function Questions() {
 
   if (phase === "summary")
     return (
-      <Summary
+      <Results
         questions={questions}
         selected={selected}
         flagged={flagged}
+        timeSpent={timeSpent}
         elapsed={elapsed}
         mode={mode}
-        subjectName={subjectName}
+        poolLabel={poolLabel}
+        testId={testId}
+        subjects={subjects}
+        systems={systems}
         openReview={openReview}
         newBlock={newBlock}
       />
     );
 
-  /* -------- running -------- */
+  /* -------- running / review (full-screen overlay) -------- */
   if (!current) return null;
-  const qid = current.id;
-  const isSubmitted = submitted[qid] || reviewMode;
   const sel = selected[qid];
   const struckSet = struck[qid] || new Set();
+  const atFirst = idx === 0;
+  const atLast = idx >= questions.length - 1;
+  const isCorrect = sel === current.correct_answer;
 
   return (
-    <div style={{ minHeight: "100vh", background: "#F8FAFC", color: TEXT }}>
+    <div style={{ position: "fixed", inset: 0, zIndex: 1000, background: "#F8FAFC", display: "flex", flexDirection: "column", color: TEXT }}>
       {/* TOP BAR */}
-      <div
-        style={{
-          background: NAVY,
-          color: "#fff",
-          padding: "12px 20px",
-          display: "flex",
-          alignItems: "center",
-          gap: 16,
-          position: "sticky",
-          top: 0,
-          zIndex: 10,
-        }}
-      >
-        <strong style={{ fontSize: 15 }}>
-          Question {idx + 1} of {questions.length}
-        </strong>
-        <Pill bg={NAVY_2}>{subjectName(current.subject_id)}</Pill>
-        <Pill bg={NAVY_2} style={{ textTransform: "capitalize" }}>
-          {current.difficulty}
-        </Pill>
+      <div style={{ background: NAVY, color: "#fff", padding: "8px 16px", display: "flex", alignItems: "center", gap: 16, flexShrink: 0 }}>
+        <div style={{ background: NAVY_2, borderRadius: 8, padding: "6px 12px", fontWeight: 700, fontSize: 14 }}>
+          Item: {idx + 1} of {questions.length}
+        </div>
+        <span style={{ fontSize: 12, color: "#94A3B8" }}>Question Id: {shortId(qid)}</span>
 
         <div style={{ flex: 1 }} />
 
-        {mode === "timed" && !reviewMode && (
-          <span
-            style={{
-              fontVariantNumeric: "tabular-nums",
-              fontWeight: 700,
-              color: timeLeft < 60 ? "#FCA5A5" : "#fff",
-            }}
-          >
-            ⏱ {fmtTime(timeLeft)}
-          </span>
+        <button onClick={goPrev} disabled={atFirst} style={navBtn(atFirst)}>← Previous</button>
+        <span style={{ fontVariantNumeric: "tabular-nums", minWidth: 56, textAlign: "center" }}>{idx + 1} / {questions.length}</span>
+        <button onClick={goNext} disabled={atLast} style={navBtn(atLast)}>Next →</button>
+
+        <div style={{ flex: 1 }} />
+
+        {mode === "timed" && !reviewMode ? (
+          <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: 700, color: timeLeft < 60 ? "#FCA5A5" : "#fff" }}>⏱ {fmtTime(timeLeft)}</span>
+        ) : (
+          <span style={{ fontSize: 12, color: "#94A3B8", fontVariantNumeric: "tabular-nums" }}>⏱ {fmtTime(elapsed)}</span>
         )}
-
-        <button
-          onClick={() => toggleFlag(qid)}
-          title="Flag for review"
-          style={{
-            background: flagged[qid] ? AMBER : "transparent",
-            color: flagged[qid] ? NAVY : "#fff",
-            border: `1px solid ${flagged[qid] ? AMBER : "#475569"}`,
-            borderRadius: 8,
-            padding: "6px 10px",
-            cursor: "pointer",
-            fontWeight: 600,
-          }}
-        >
-          {flagged[qid] ? "⚑ Flagged" : "⚐ Flag"}
-        </button>
-
-        <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-          <IconBtn onClick={() => setFontSize((f) => Math.max(14, f - 1))}>A−</IconBtn>
-          <span style={{ fontSize: 12, width: 34, textAlign: "center" }}>{fontSize}px</span>
-          <IconBtn onClick={() => setFontSize((f) => Math.min(22, f + 1))}>A+</IconBtn>
-        </div>
       </div>
 
-      {/* BODY */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: isSubmitted ? "minmax(0,1.4fr) minmax(0,1fr)" : "1fr",
-          gap: 20,
-          padding: 20,
-          maxWidth: 1400,
-          margin: "0 auto",
-          alignItems: "start",
-        }}
-      >
-        {/* LEFT — QUESTION */}
-        <div
-          style={{
-            background: "#fff",
-            border: `1px solid ${BORDER}`,
-            borderRadius: 14,
-            padding: 24,
-          }}
-        >
-          <div
-            ref={stemRef}
-            onMouseUp={onStemMouseUp}
-            style={{ fontSize, lineHeight: 1.7, whiteSpace: "pre-wrap", userSelect: "text" }}
-          >
-            {renderHighlighted(current.stem, highlights[qid] || [])}
-          </div>
+      {/* MIDDLE — rail + panes */}
+      <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
+        <QuestionRail questions={questions} idx={idx} selected={selected} submitted={submitted} flagged={flagged} reviewMode={reviewMode} onJump={jumpTo} />
 
-          {(highlights[qid]?.length ?? 0) > 0 && !reviewMode && (
-            <button
-              onClick={clearHighlights}
-              style={{
-                marginTop: 8,
-                background: "transparent",
-                border: "none",
-                color: MUTED,
-                fontSize: 12,
-                cursor: "pointer",
-                textDecoration: "underline",
-              }}
-            >
-              Clear highlights
-            </button>
-          )}
-
-          {/* OPTIONS */}
-          <div style={{ marginTop: 20, display: "flex", flexDirection: "column", gap: 10 }}>
-            {Array.isArray(current.options) &&
-              current.options.map((opt, i) => {
-                const isCorrect = i === current.correct_answer;
-                const isPicked = sel === i;
-                const isStruck = struckSet.has(i);
-
-                let bg = "#fff";
-                let border = BORDER;
-                if (isSubmitted) {
-                  if (isCorrect) {
-                    bg = GREEN_SOFT;
-                    border = GREEN;
-                  } else if (isPicked) {
-                    bg = RED_SOFT;
-                    border = RED;
-                  }
-                } else if (isPicked) {
-                  bg = BLUE_SOFT;
-                  border = BLUE;
-                }
-
-                return (
-                  <div
-                    key={i}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 14,
-                      background: bg,
-                      border: `1.5px solid ${border}`,
-                      borderRadius: 10,
-                      padding: "14px 16px",
-                    }}
-                  >
-                    {/* radio = select */}
-                    <button
-                      onClick={() => selectOption(qid, i)}
-                      aria-label={`Select option ${LETTERS[i]}`}
-                      style={{
-                        width: 22,
-                        height: 22,
-                        borderRadius: "50%",
-                        border: `2px solid ${isPicked ? BLUE : "#CBD5E1"}`,
-                        background: "#fff",
-                        flexShrink: 0,
-                        cursor: isSubmitted ? "default" : "pointer",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        padding: 0,
-                      }}
-                    >
-                      {isPicked && (
-                        <span
-                          style={{
-                            width: 10,
-                            height: 10,
-                            borderRadius: "50%",
-                            background: BLUE,
-                          }}
-                        />
-                      )}
-                    </button>
-
-                    {/* text = strike */}
-                    <span
-                      onClick={() => toggleStrike(qid, i)}
-                      style={{
-                        flex: 1,
-                        fontSize,
-                        cursor: isSubmitted ? "default" : "pointer",
-                        textDecoration: isStruck ? "line-through" : "none",
-                        color: isStruck ? MUTED : TEXT,
-                        userSelect: "none",
-                      }}
-                    >
-                      <strong style={{ marginRight: 8 }}>{LETTERS[i]}.</strong>
-                      {opt}
-                    </span>
-
-                    {isSubmitted && isCorrect && (
-                      <span style={{ color: GREEN, fontWeight: 700 }}>✓</span>
-                    )}
-                    {isSubmitted && isPicked && !isCorrect && (
-                      <span style={{ color: RED, fontWeight: 700 }}>✗</span>
-                    )}
-                  </div>
-                );
-              })}
-          </div>
-
-          {/* submit / next */}
-          {!reviewMode && (
-            <div style={{ marginTop: 22, display: "flex", gap: 12 }}>
-              {!isSubmitted ? (
+        <div style={{ flex: 1, display: "flex", flexDirection: splitVertical ? "column" : "row", minWidth: 0 }}>
+          {/* MAIN PANE */}
+          <div style={{ flex: 1, minWidth: 0, overflowY: "auto", padding: 24 }}>
+            <div style={{ maxWidth: 760, margin: "0 auto" }}>
+              {/* Mark Question + font size */}
+              <div style={{ display: "flex", alignItems: "center", marginBottom: 18 }}>
                 <button
-                  onClick={submitAnswer}
-                  disabled={sel == null}
-                  style={{
-                    background: sel == null ? "#93C5FD" : BLUE,
-                    color: "#fff",
-                    border: "none",
-                    borderRadius: 10,
-                    padding: "12px 28px",
-                    fontWeight: 700,
-                    fontSize: 15,
-                    cursor: sel == null ? "not-allowed" : "pointer",
-                  }}
+                  onClick={() => toggleFlag(qid)}
+                  style={{ display: "flex", alignItems: "center", gap: 8, background: "transparent", border: "none", cursor: "pointer", color: flagged[qid] ? AMBER : MUTED, fontWeight: 600, fontSize: 13, padding: 0 }}
                 >
-                  Submit Answer
+                  <span style={{ width: 16, height: 16, borderRadius: 3, border: `1.5px solid ${flagged[qid] ? AMBER : "#CBD5E1"}`, background: flagged[qid] ? AMBER : "#fff", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 800 }}>
+                    {flagged[qid] ? "✓" : ""}
+                  </span>
+                  ⚑ Mark Question
                 </button>
-              ) : idx < questions.length - 1 ? (
-                <button onClick={goNext} style={primaryBtn}>
-                  Next Question →
-                </button>
-              ) : (
-                <button onClick={finishBlock} style={{ ...primaryBtn, background: GREEN }}>
-                  Finish block
+                <div style={{ flex: 1 }} />
+                <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                  <IconBtn onClick={() => setFontSize((f) => Math.max(14, f - 1))}>A−</IconBtn>
+                  <span style={{ fontSize: 12, width: 34, textAlign: "center", color: MUTED }}>{fontSize}px</span>
+                  <IconBtn onClick={() => setFontSize((f) => Math.min(22, f + 1))}>A+</IconBtn>
+                </div>
+              </div>
+
+              {/* stem */}
+              <div ref={stemRef} onMouseUp={onStemMouseUp} style={{ fontSize, lineHeight: 1.7, whiteSpace: "pre-wrap", userSelect: "text" }}>
+                {renderHighlighted(current.stem, highlights[qid] || [])}
+              </div>
+              {(highlights[qid]?.length ?? 0) > 0 && !reviewMode && (
+                <button onClick={clearHighlights} style={{ marginTop: 8, background: "transparent", border: "none", color: MUTED, fontSize: 12, cursor: "pointer", textDecoration: "underline" }}>
+                  Clear highlights
                 </button>
               )}
+
+              {/* options */}
+              <div style={{ marginTop: 20, display: "flex", flexDirection: "column", gap: 10 }}>
+                {Array.isArray(current.options) &&
+                  current.options.map((opt, i) => {
+                    const optCorrect = i === current.correct_answer;
+                    const isPicked = sel === i;
+                    const isStruck = struckSet.has(i);
+
+                    let bg = "#fff";
+                    let border = BORDER;
+                    if (reveal) {
+                      if (optCorrect) {
+                        bg = GREEN_SOFT;
+                        border = GREEN;
+                      } else if (isPicked) {
+                        bg = RED_SOFT;
+                        border = RED;
+                      }
+                    } else if (isPicked) {
+                      bg = BLUE_SOFT;
+                      border = BLUE;
+                    }
+
+                    return (
+                      <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, background: bg, border: `1.5px solid ${border}`, borderRadius: 10, padding: "12px 14px" }}>
+                        <button
+                          onClick={() => selectOption(qid, i)}
+                          aria-label={`Select option ${LETTERS[i]}`}
+                          style={{ width: 22, height: 22, borderRadius: "50%", border: `2px solid ${isPicked ? BLUE : "#CBD5E1"}`, background: "#fff", flexShrink: 0, cursor: reveal ? "default" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", padding: 0 }}
+                        >
+                          {isPicked && <span style={{ width: 10, height: 10, borderRadius: "50%", background: BLUE }} />}
+                        </button>
+
+                        <span
+                          onClick={() => selectOption(qid, i)}
+                          style={{ flex: 1, fontSize, cursor: reveal ? "default" : "pointer", textDecoration: isStruck ? "line-through" : "none", color: isStruck ? MUTED : TEXT }}
+                        >
+                          <strong style={{ marginRight: 8 }}>{LETTERS[i]}.</strong>
+                          {opt}
+                        </span>
+
+                        {reveal && optCorrect && <span style={{ color: GREEN, fontWeight: 700 }}>✓</span>}
+                        {reveal && isPicked && !optCorrect && <span style={{ color: RED, fontWeight: 700 }}>✗</span>}
+
+                        {!reveal && (
+                          <button
+                            onClick={() => toggleStrike(qid, i)}
+                            title="Strike out"
+                            style={{ flexShrink: 0, background: "transparent", border: `1px solid ${BORDER}`, borderRadius: 6, padding: "3px 7px", cursor: "pointer", color: isStruck ? BLUE : MUTED, fontSize: 12, fontWeight: 700, textDecoration: "line-through" }}
+                          >
+                            ab
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+              </div>
+
+              {/* submit / next */}
+              {!reviewMode && (
+                <div style={{ marginTop: 20, display: "flex", gap: 12 }}>
+                  {!answered ? (
+                    <button onClick={submitAnswer} disabled={sel == null} style={{ background: sel == null ? "#93C5FD" : BLUE, color: "#fff", border: "none", borderRadius: 10, padding: "12px 28px", fontWeight: 700, fontSize: 15, cursor: sel == null ? "not-allowed" : "pointer" }}>
+                      Submit Answer
+                    </button>
+                  ) : !atLast ? (
+                    <button onClick={goNext} style={primaryBtn}>Next Question →</button>
+                  ) : (
+                    <button onClick={finishBlock} style={{ ...primaryBtn, background: GREEN }}>End Block</button>
+                  )}
+                </div>
+              )}
+
+              {/* result box */}
+              {reveal && (
+                <div style={{ marginTop: 20, border: `1px solid ${BORDER}`, borderRadius: 12, overflow: "hidden" }}>
+                  <div style={{ display: "flex", borderBottom: `1px solid ${BORDER}` }}>
+                    <ResultCell label={answered || reviewMode ? (isCorrect ? "Correct" : sel == null ? "Omitted" : "Incorrect") : "—"} value="" color={isCorrect ? GREEN : sel == null ? MUTED : RED} big />
+                    <ResultCell label="Correct answer" value={LETTERS[current.correct_answer]} />
+                    <ResultCell label="% Answered correctly" value="—" />
+                    <ResultCell label="Time spent" value={fmtTime(timeSpent[qid] || 0)} last />
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* EXPLANATION PANE */}
+          {reveal && (
+            <div style={{ flex: 1, minWidth: 0, overflowY: "auto", borderLeft: splitVertical ? "none" : `1px solid ${BORDER}`, borderTop: splitVertical ? `1px solid ${BORDER}` : "none", background: "#fff", padding: 24 }}>
+              <div style={{ maxWidth: 760, margin: "0 auto" }}>
+                <div style={{ display: "inline-block", fontSize: 13, fontWeight: 700, color: BLUE, borderBottom: `2px solid ${BLUE}`, paddingBottom: 6, marginBottom: 16 }}>Explanation</div>
+                <p style={{ fontSize, lineHeight: 1.7, color: "#334155", whiteSpace: "pre-wrap", margin: 0 }}>{current.explanation || "No explanation provided."}</p>
+
+                {current.board_trap && (
+                  <div style={{ marginTop: 16, background: AMBER_SOFT, border: `1px solid ${AMBER}`, borderRadius: 10, padding: "12px 14px" }}>
+                    <strong style={{ color: "#92400E" }}>⚠️ Board Trap</strong>
+                    <p style={{ margin: "6px 0 0", color: "#92400E", lineHeight: 1.6 }}>{current.board_trap}</p>
+                  </div>
+                )}
+
+                {current.high_yield && (
+                  <div style={{ marginTop: 16, background: TEAL_SOFT, borderLeft: `4px solid ${TEAL}`, borderRadius: 10, padding: "14px 18px" }}>
+                    <strong style={{ color: TEAL, fontSize: 15 }}>⭐ High-Yield</strong>
+                    <p style={{ margin: "8px 0 0", color: "#134E4A", lineHeight: 1.7, whiteSpace: "pre-wrap" }}>{current.high_yield}</p>
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </div>
-
-        {/* RIGHT — EXPLANATION */}
-        {isSubmitted && (
-          <div
-            style={{
-              background: "#fff",
-              border: `1px solid ${BORDER}`,
-              borderRadius: 14,
-              padding: 24,
-              position: "sticky",
-              top: 80,
-              maxHeight: "calc(100vh - 110px)",
-              overflowY: "auto",
-            }}
-          >
-            <h3 style={{ margin: "0 0 12px", fontSize: 18 }}>Explanation</h3>
-            <p style={{ fontSize, lineHeight: 1.7, color: "#334155", whiteSpace: "pre-wrap" }}>
-              {current.explanation || "No explanation provided."}
-            </p>
-
-            {current.board_trap && (
-              <div
-                style={{
-                  marginTop: 16,
-                  background: AMBER_SOFT,
-                  border: `1px solid ${AMBER}`,
-                  borderRadius: 10,
-                  padding: "12px 14px",
-                }}
-              >
-                <strong style={{ color: "#92400E" }}>⚠️ Board Trap</strong>
-                <p style={{ margin: "6px 0 0", color: "#92400E", lineHeight: 1.6 }}>
-                  {current.board_trap}
-                </p>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* HIGH-YIELD — full width */}
-        {isSubmitted && current.high_yield && (
-          <div
-            style={{
-              gridColumn: "1 / -1",
-              background: TEAL_SOFT,
-              borderLeft: `4px solid ${TEAL}`,
-              borderRadius: 10,
-              padding: "16px 20px",
-            }}
-          >
-            <strong style={{ color: TEAL, fontSize: 15 }}>⭐ High-Yield</strong>
-            <p style={{ margin: "8px 0 0", color: "#134E4A", lineHeight: 1.7, whiteSpace: "pre-wrap" }}>
-              {current.high_yield}
-            </p>
-          </div>
-        )}
       </div>
 
       {/* BOTTOM BAR */}
-      <div
-        style={{
-          position: "sticky",
-          bottom: 0,
-          background: "#fff",
-          borderTop: `1px solid ${BORDER}`,
-          padding: "12px 20px",
-          display: "flex",
-          alignItems: "center",
-          gap: 12,
-        }}
-      >
-        <button onClick={goPrev} disabled={idx === 0} style={ghostBtn}>
-          ← Previous
-        </button>
+      <div style={{ background: NAVY, color: "#fff", padding: "8px 16px", display: "flex", alignItems: "center", gap: 16, flexShrink: 0 }}>
+        <span style={{ fontSize: 12, color: "#94A3B8" }}>Test Id: {shortId(testId)}</span>
+        <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.08em", color: AMBER }}>
+          {reviewMode ? "REVIEW" : mode === "timed" ? "TIMED" : "TUTOR"}
+        </span>
         <div style={{ flex: 1 }} />
+        <button onClick={() => setSplitVertical((v) => !v)} style={navBtn(false)} title="Toggle layout">
+          ▤ Layout
+        </button>
         {reviewMode ? (
-          <button onClick={() => setPhase("summary")} style={primaryBtn}>
-            Back to summary
-          </button>
+          <button onClick={() => setPhase("summary")} style={{ ...navBtn(false), background: BLUE, borderColor: BLUE }}>Back to Results</button>
         ) : (
-          <button onClick={finishBlock} style={{ ...ghostBtn, color: RED, borderColor: RED }}>
-            End block
-          </button>
+          <button onClick={finishBlock} style={{ ...navBtn(false), background: RED, borderColor: RED }}>End Block</button>
         )}
-        <div style={{ flex: 1 }} />
-        <button onClick={goNext} disabled={idx >= questions.length - 1} style={ghostBtn}>
-          Next →
-        </button>
       </div>
     </div>
   );
 }
 
 /* ================================================================== */
-/*  SETUP SCREEN                                                      */
+/*  IN-TEST: LEFT RAIL                                                */
+/* ================================================================== */
+function QuestionRail({ questions, idx, selected, submitted, flagged, reviewMode, onJump }) {
+  return (
+    <div style={{ width: 200, flexShrink: 0, borderRight: `1px solid ${BORDER}`, background: "#fff", overflowY: "auto" }}>
+      <div style={{ padding: "12px 14px", fontSize: 11, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: "0.05em", borderBottom: `1px solid ${BORDER}`, position: "sticky", top: 0, background: "#fff" }}>
+        Question Status
+      </div>
+      {questions.map((q, i) => {
+        const isAnswered = submitted[q.id] || reviewMode;
+        const picked = selected[q.id];
+        let glyph = null;
+        let color = MUTED;
+        if (isAnswered && picked != null) {
+          if (picked === q.correct_answer) {
+            glyph = "✓";
+            color = GREEN;
+          } else {
+            glyph = "✗";
+            color = RED;
+          }
+        } else if (isAnswered) {
+          glyph = "○";
+        } else if (i === idx) {
+          glyph = "●";
+          color = BLUE;
+        }
+        const current = i === idx;
+        return (
+          <button
+            key={q.id}
+            onClick={() => onJump(i)}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              width: "100%",
+              textAlign: "left",
+              padding: "8px 12px",
+              border: "none",
+              borderBottom: `1px solid ${BORDER}`,
+              borderLeft: current ? `3px solid ${BLUE}` : "3px solid transparent",
+              background: current ? BLUE_SOFT : "#fff",
+              cursor: "pointer",
+              fontSize: 13,
+              color: TEXT,
+            }}
+          >
+            <span style={{ width: 22, textAlign: "right", color: MUTED, fontVariantNumeric: "tabular-nums" }}>{i + 1}</span>
+            <span style={{ flex: 1 }} />
+            {flagged[q.id] && <span style={{ color: AMBER, fontSize: 12 }}>⚑</span>}
+            <span style={{ color, fontWeight: 700, width: 14, textAlign: "center" }}>{glyph}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function ResultCell({ label, value, color, big, last }) {
+  return (
+    <div style={{ flex: 1, padding: "12px 14px", borderRight: last ? "none" : `1px solid ${BORDER}`, textAlign: "center" }}>
+      <div style={{ fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 4 }}>{label}</div>
+      <div style={{ fontSize: big ? 16 : 15, fontWeight: 700, color: color || TEXT }}>{value}</div>
+    </div>
+  );
+}
+
+/* ================================================================== */
+/*  SETUP SCREEN — single scrollable config page                     */
 /* ================================================================== */
 function Setup(props) {
   const {
-    loadingMeta, systems, subjects, counts,
-    pickedSystems, pickedSubjects, toggleSystem, toggleSubject,
-    toggleAllSystems, toggleAllSubjects,
-    numQuestions, setNumQuestions, availableCount,
-    mode, setMode, startBlock, starting, setupError,
+    loadingMeta, systems, subjects, lectures, userQ, marks,
+    pickedSystems, setPickedSystems,
+    pickedSubjects, setPickedSubjects,
+    pickedLectures, setPickedLectures,
+    status, setStatus,
+    numQuestions, setNumQuestions,
+    mode, setMode,
+    startBlock, starting, setupError,
   } = props;
 
-  const hasSubjects = pickedSubjects.length > 0;
+  const toggleStatus = (k) => setStatus((s) => ({ ...s, [k]: !s[k] }));
+
+  // cascading toggles with locking + child-clearing
+  const toggleSystem = (id) => {
+    if (pickedSystems.includes(id)) {
+      const remSub = subjects.filter((s) => s.system_id === id).map((s) => s.id);
+      const remLec = lectures.filter((l) => remSub.includes(l.subject_id)).map((l) => l.id);
+      setPickedSystems(pickedSystems.filter((x) => x !== id));
+      setPickedSubjects(pickedSubjects.filter((sid) => !remSub.includes(sid)));
+      setPickedLectures(pickedLectures.filter((lid) => !remLec.includes(lid)));
+    } else {
+      setPickedSystems([...pickedSystems, id]);
+    }
+  };
+  const toggleSubject = (id) => {
+    if (pickedSubjects.includes(id)) {
+      const remLec = lectures.filter((l) => l.subject_id === id).map((l) => l.id);
+      setPickedSubjects(pickedSubjects.filter((x) => x !== id));
+      setPickedLectures(pickedLectures.filter((lid) => !remLec.includes(lid)));
+    } else {
+      setPickedSubjects([...pickedSubjects, id]);
+    }
+  };
+  const toggleLecture = (id) => setPickedLectures((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
+
+  // --- predicates (data is small → recompute each render) ---
+  const passStatus = (q) =>
+    (status.unused && q.status === "unused") ||
+    (status.incorrect && q.status === "incorrect") ||
+    (status.correct && q.status === "correct") ||
+    (status.marked && marks.has(q.id)) ||
+    (status.omitted && false); // no "omitted" storage yet → always 0
+
+  const inSys = (q) => !pickedSystems.length || pickedSystems.includes(q.system_id);
+  const inSub = (q) => !pickedSubjects.length || pickedSubjects.includes(q.subject_id);
+  const inLec = (q) => !pickedLectures.length || (q.lecture_id && pickedLectures.includes(q.lecture_id));
+  const cascade = (q) => inSys(q) && inSub(q) && inLec(q);
+
+  // status counts within current cascade scope
+  const statusCounts = { unused: 0, incorrect: 0, correct: 0, marked: 0, omitted: 0 };
+  userQ.forEach((q) => {
+    if (!cascade(q)) return;
+    statusCounts[q.status] += 1;
+    if (marks.has(q.id)) statusCounts.marked += 1;
+  });
+
+  // per-item counts reflect chosen status filter
+  const statusPool = userQ.filter(passStatus);
+  const sysCount = {};
+  const subCount = {};
+  const lecCount = {};
+  statusPool.forEach((q) => {
+    if (q.system_id) sysCount[q.system_id] = (sysCount[q.system_id] || 0) + 1;
+    if (q.subject_id) subCount[q.subject_id] = (subCount[q.subject_id] || 0) + 1;
+    if (q.lecture_id) lecCount[q.lecture_id] = (lecCount[q.lecture_id] || 0) + 1;
+  });
+
+  const shownSubjects = subjects.filter((s) => pickedSystems.includes(s.system_id));
+  const shownLectures = lectures.filter((l) => pickedSubjects.includes(l.subject_id));
+
+  const finalPool = userQ.filter((q) => cascade(q) && passStatus(q));
+  const N = finalPool.length;
+  const take = Math.min(Math.max(1, numQuestions), N || 1);
+
+  const subjectsLocked = pickedSystems.length === 0;
+  const lecturesLocked = pickedSubjects.length === 0;
+
+  // master (select-all) checkboxes per cascading section
+  const sysAllOn = systems.length > 0 && pickedSystems.length === systems.length;
+  const subAllOn = shownSubjects.length > 0 && pickedSubjects.length === shownSubjects.length;
+  const lecAllOn = shownLectures.length > 0 && pickedLectures.length === shownLectures.length;
+  const toggleSysMaster = () =>
+    sysAllOn ? toggleSystemClearAll(setPickedSystems, setPickedSubjects, setPickedLectures) : setPickedSystems(systems.map((s) => s.id));
+  const toggleSubMaster = () => {
+    if (subAllOn) {
+      setPickedSubjects([]);
+      setPickedLectures([]);
+    } else setPickedSubjects(shownSubjects.map((s) => s.id));
+  };
+  const toggleLecMaster = () => (lecAllOn ? setPickedLectures([]) : setPickedLectures(shownLectures.map((l) => l.id)));
 
   return (
-    <div style={{ minHeight: "100vh", background: "#fff", padding: "40px 20px" }}>
-      <div style={{ maxWidth: 880, margin: "0 auto" }}>
-        <h1 style={{ fontSize: 26, margin: "0 0 4px", color: TEXT }}>Create Question Block</h1>
-        <p style={{ color: MUTED, margin: "0 0 28px", fontSize: 14 }}>
-          Select systems and subjects to build your block.
-        </p>
+    <div style={{ minHeight: "100vh", background: "#F8FAFC", color: TEXT }}>
+      <div style={{ maxWidth: 920, margin: "0 auto", padding: "32px 20px 110px" }}>
+        <h1 style={{ fontSize: 26, margin: "0 0 4px" }}>Create Test</h1>
+        <p style={{ color: MUTED, margin: "0 0 28px", fontSize: 14 }}>Build a custom question block.</p>
 
         {loadingMeta ? (
           <p style={{ color: MUTED }}>Loading…</p>
         ) : (
           <>
-            <FilterSection
-              title="Systems"
-              items={systems}
-              picked={pickedSystems}
-              counts={counts.bySystem}
-              onToggle={toggleSystem}
-              onToggleAll={toggleAllSystems}
-              emptyText="No systems configured yet."
-            />
-
-            <FilterSection
-              title="Subjects"
-              items={subjects}
-              picked={pickedSubjects}
-              counts={counts.bySubject}
-              onToggle={toggleSubject}
-              onToggleAll={toggleAllSubjects}
-              emptyText="No subjects available yet."
-            />
-
-            {/* COUNT */}
-            {hasSubjects && (
-              <div style={{ marginBottom: 28 }}>
-                <h3 style={{ margin: "0 0 12px", fontSize: 16, color: TEXT }}>Number of questions</h3>
-                <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-                  <input
-                    type="number"
-                    min={1}
-                    max={availableCount}
-                    value={numQuestions}
-                    onChange={(e) => setNumQuestions(Number(e.target.value))}
-                    style={{ width: 110, padding: "10px 12px", fontSize: 16, border: `1px solid ${BORDER}`, borderRadius: 8 }}
-                  />
-                  <span style={{ color: MUTED }}>
-                    {availableCount} question{availableCount === 1 ? "" : "s"} available
-                  </span>
-                </div>
+            {/* 1. TEST MODE */}
+            <Section title="Test Mode">
+              <div style={{ display: "flex", gap: 12 }}>
+                <ModePill active={mode === "tutor"} onClick={() => setMode("tutor")} label="Tutor" sub="Explanation after each question" />
+                <ModePill active={mode === "timed"} onClick={() => setMode("timed")} label="Timed" sub={`${SECONDS_PER_Q}s per question · explanations at the end`} />
               </div>
-            )}
+            </Section>
 
-            {/* MODE */}
-            {hasSubjects && (
-              <div style={{ marginBottom: 28 }}>
-                <h3 style={{ margin: "0 0 12px", fontSize: 16, color: TEXT }}>Mode</h3>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-                  <ModeCard
-                    active={mode === "tutor"}
-                    onClick={() => setMode("tutor")}
-                    title="Tutor Mode"
-                    desc="See the explanation right after each question."
-                  />
-                  <ModeCard
-                    active={mode === "timed"}
-                    onClick={() => setMode("timed")}
-                    title="Timed Mode"
-                    desc={`${Math.round((Math.min(numQuestions, availableCount) * SECONDS_PER_Q) / 60)} min for the block · explanations at the end.`}
-                  />
-                </div>
+            {/* 2. QUESTION MODE */}
+            <Section title="Question Mode" totalPill={N}>
+              <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "12px 26px" }}>
+                <StatusToggle on={status.unused} onClick={() => toggleStatus("unused")} label="Unused" count={statusCounts.unused} />
+                <StatusToggle on={status.incorrect} onClick={() => toggleStatus("incorrect")} label="Incorrect" count={statusCounts.incorrect} />
+                <StatusToggle on={status.correct} onClick={() => toggleStatus("correct")} label="Correct" count={statusCounts.correct} />
+                <StatusToggle on={status.marked} onClick={() => toggleStatus("marked")} label="Marked" count={statusCounts.marked} />
+                <StatusToggle on={status.omitted} onClick={() => toggleStatus("omitted")} label="Omitted" count={statusCounts.omitted} />
               </div>
-            )}
+            </Section>
 
-            {setupError && <p style={{ color: RED, marginTop: 8 }}>{setupError}</p>}
+            {/* 3. CASCADING */}
+            <Section title="Systems" master={{ on: sysAllOn, onToggle: toggleSysMaster }}>
+              {systems.length === 0 ? (
+                <Empty>No systems configured yet.</Empty>
+              ) : (
+                <Grid>
+                  {systems.map((s) => (
+                    <CheckRow key={s.id} on={pickedSystems.includes(s.id)} onClick={() => toggleSystem(s.id)} label={s.name} count={sysCount[s.id] || 0} />
+                  ))}
+                </Grid>
+              )}
+            </Section>
 
-            {hasSubjects && (
-              <button
-                onClick={startBlock}
-                disabled={starting || availableCount === 0}
-                style={{
-                  ...primaryBtn,
-                  width: "100%",
-                  marginTop: 12,
-                  padding: "16px",
-                  fontSize: 17,
-                  opacity: starting || availableCount === 0 ? 0.6 : 1,
-                  cursor: starting || availableCount === 0 ? "not-allowed" : "pointer",
-                }}
-              >
-                {starting ? "Building block…" : "Create Block"}
-              </button>
-            )}
+            <Section title="Subjects" locked={subjectsLocked} master={{ on: subAllOn, onToggle: toggleSubMaster, disabled: subjectsLocked }}>
+              {subjectsLocked ? (
+                <Locked>Select a system first.</Locked>
+              ) : shownSubjects.length === 0 ? (
+                <Empty>No subjects for the selected systems.</Empty>
+              ) : (
+                <Grid>
+                  {shownSubjects.map((s) => (
+                    <CheckRow key={s.id} on={pickedSubjects.includes(s.id)} onClick={() => toggleSubject(s.id)} label={s.name} count={subCount[s.id] || 0} />
+                  ))}
+                </Grid>
+              )}
+            </Section>
+
+            <Section title="Lectures" locked={lecturesLocked} master={{ on: lecAllOn, onToggle: toggleLecMaster, disabled: lecturesLocked }}>
+              {lecturesLocked ? (
+                <Locked>Select a subject first.</Locked>
+              ) : shownLectures.length === 0 ? (
+                <Empty>No lectures for the selected subjects.</Empty>
+              ) : (
+                <Grid>
+                  {shownLectures.map((l) => (
+                    <CheckRow key={l.id} on={pickedLectures.includes(l.id)} onClick={() => toggleLecture(l.id)} label={l.title} count={lecCount[l.id] || 0} />
+                  ))}
+                </Grid>
+              )}
+            </Section>
           </>
         )}
       </div>
-    </div>
-  );
-}
 
-/* UWorld-style filter list: master toggle + "(picked/total)" + 3-col rows. */
-function FilterSection({ title, items, picked, counts, onToggle, onToggleAll, emptyText }) {
-  const allOn = items.length > 0 && picked.length === items.length;
-  return (
-    <div style={{ marginBottom: 30 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
-        <Toggle on={allOn} onClick={onToggleAll} />
-        <strong style={{ fontSize: 16, color: TEXT }}>
-          {title} ({picked.length}/{items.length})
-        </strong>
-      </div>
-      {items.length === 0 ? (
-        <Empty>{emptyText}</Empty>
-      ) : (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
-          {items.map((it) => {
-            const on = picked.includes(it.id);
-            return (
-              <button
-                key={it.id}
-                onClick={() => onToggle(it.id)}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 12,
-                  padding: "12px 14px",
-                  border: `1px solid ${BORDER}`,
-                  borderRadius: 8,
-                  background: "#fff",
-                  cursor: "pointer",
-                  textAlign: "left",
-                  width: "100%",
-                }}
-              >
-                <Checkbox on={on} />
-                <span style={{ flex: 1, minWidth: 0, fontSize: 14, color: TEXT, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {it.name}
-                </span>
-                <span style={{ color: BLUE, fontWeight: 700, fontSize: 14, width: 40, textAlign: "right", flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>
-                  {counts[it.id] || 0}
-                </span>
-              </button>
-            );
-          })}
+      {/* FOOTER */}
+      {!loadingMeta && (
+        <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: "#fff", borderTop: `1px solid ${BORDER}`, padding: "14px 20px", display: "flex", alignItems: "center", gap: 16, justifyContent: "center", flexWrap: "wrap" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <input
+              type="number"
+              min={1}
+              max={N}
+              value={numQuestions}
+              onChange={(e) => setNumQuestions(Math.max(1, Math.min(N || 1, Number(e.target.value) || 1)))}
+              style={{ width: 90, padding: "10px 12px", fontSize: 16, border: `1px solid ${BORDER}`, borderRadius: 8 }}
+            />
+            <span style={{ color: MUTED, fontSize: 14 }}>
+              of <strong style={{ color: TEXT }}>{N}</strong> selected
+            </span>
+          </div>
+          {setupError && <span style={{ color: RED, fontSize: 13 }}>{setupError}</span>}
+          <button
+            onClick={() => startBlock(finalPool.map((q) => q.id), numQuestions)}
+            disabled={starting || N === 0}
+            style={{ ...primaryBtn, padding: "12px 30px", opacity: starting || N === 0 ? 0.6 : 1, cursor: starting || N === 0 ? "not-allowed" : "pointer" }}
+          >
+            {starting ? "Generating…" : `Generate test${N > 0 ? ` · ${take}` : ""}`}
+          </button>
         </div>
       )}
     </div>
   );
 }
 
-function Toggle({ on, onClick }) {
+function toggleSystemClearAll(setSys, setSub, setLec) {
+  setSys([]);
+  setSub([]);
+  setLec([]);
+}
+
+/* ---- setup sub-components ---- */
+function Section({ title, children, locked, master, totalPill }) {
+  return (
+    <div style={{ opacity: locked ? 0.4 : 1, padding: "22px 0", borderTop: `0.5px solid ${BORDER}` }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
+        {master && (
+          <button
+            onClick={master.onToggle}
+            disabled={master.disabled}
+            aria-label="Select all"
+            style={{ background: "transparent", border: "none", padding: 0, cursor: master.disabled ? "default" : "pointer", lineHeight: 0 }}
+          >
+            <Checkbox on={master.on} />
+          </button>
+        )}
+        <h3 style={{ margin: 0, fontSize: 19, fontWeight: 500, color: HEAD }}>{title}</h3>
+        {totalPill != null && <TotalPill n={totalPill} />}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function Grid({ children }) {
+  return <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 14 }}>{children}</div>;
+}
+
+function CheckRow({ on, onClick, label, count }) {
   return (
     <button
       onClick={onClick}
-      role="switch"
-      aria-checked={on}
-      style={{
-        width: 38,
-        height: 22,
-        borderRadius: 999,
-        border: "none",
-        cursor: "pointer",
-        background: on ? BLUE : "#CBD5E1",
-        position: "relative",
-        padding: 0,
-        flexShrink: 0,
-        transition: "background .15s",
-      }}
+      style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", border: `1px solid ${on ? BLUE : BORDER}`, borderRadius: 10, background: on ? BLUE_SOFT : "#fff", cursor: "pointer", textAlign: "left", width: "100%" }}
     >
-      <span style={{ position: "absolute", top: 2, left: on ? 18 : 2, width: 18, height: 18, borderRadius: "50%", background: "#fff", transition: "left .15s" }} />
+      <Checkbox on={on} />
+      <span style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 8 }}>
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 14, color: TEXT }}>{label}</span>
+        <CountPill n={count} />
+      </span>
+    </button>
+  );
+}
+
+// Compact inline status checkbox (UWorld-style row), not a bordered card.
+function StatusToggle({ on, onClick, label, count }) {
+  return (
+    <button onClick={onClick} style={{ display: "inline-flex", alignItems: "center", gap: 8, background: "transparent", border: "none", cursor: "pointer", padding: "2px 0", fontFamily: "inherit" }}>
+      <span style={{ width: 18, height: 18, borderRadius: 5, flexShrink: 0, border: `2px solid ${on ? BLUE : "#CBD5E1"}`, background: on ? BLUE : "#fff", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 800 }}>
+        {on ? "✓" : ""}
+      </span>
+      <span style={{ fontSize: 14, color: TEXT }}>{label}</span>
+      <CountPill n={count} />
+    </button>
+  );
+}
+
+function CountPill({ n }) {
+  return (
+    <span style={{ color: BLUE, fontSize: 12, fontWeight: 600, border: `1px solid ${PILL_BORDER}`, borderRadius: 999, padding: "1px 9px", flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>
+      ({n})
+    </span>
+  );
+}
+
+function TotalPill({ n }) {
+  return (
+    <span style={{ color: BLUE, fontSize: 13, fontWeight: 700, border: `1px solid ${PILL_BORDER}`, background: BLUE_SOFT, borderRadius: 999, padding: "3px 12px" }}>
+      Total Available {n}
+    </span>
+  );
+}
+
+function ModePill({ active, onClick, label, sub }) {
+  return (
+    <button onClick={onClick} style={{ flex: 1, textAlign: "left", padding: "14px 16px", borderRadius: 10, cursor: "pointer", border: `1.5px solid ${active ? BLUE : BORDER}`, background: active ? BLUE_SOFT : "#fff" }}>
+      <div style={{ fontWeight: 700, color: active ? BLUE : TEXT }}>{label}</div>
+      <div style={{ fontSize: 12, color: MUTED, marginTop: 3, lineHeight: 1.5 }}>{sub}</div>
     </button>
   );
 }
 
 function Checkbox({ on }) {
   return (
-    <span
-      style={{
-        width: 18,
-        height: 18,
-        borderRadius: 3,
-        flexShrink: 0,
-        border: `1.5px solid ${on ? BLUE : "#CBD5E1"}`,
-        background: on ? BLUE : "#fff",
-        color: "#fff",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        fontSize: 12,
-        fontWeight: 800,
-      }}
-    >
+    <span style={{ width: 26, height: 26, borderRadius: 7, flexShrink: 0, border: `2px solid ${on ? BLUE : "#CBD5E1"}`, background: on ? BLUE : "#fff", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, fontWeight: 800 }}>
       {on ? "✓" : ""}
     </span>
   );
 }
 
+function Locked({ children }) {
+  return <div style={{ padding: 16, border: `1px dashed ${BORDER}`, borderRadius: 10, color: MUTED, fontStyle: "italic" }}>{children}</div>;
+}
+
 /* ================================================================== */
-/*  SUMMARY SCREEN                                                    */
+/*  RESULTS SCREEN                                                    */
 /* ================================================================== */
-function Summary({ questions, selected, flagged, elapsed, mode, subjectName, openReview, newBlock }) {
+function Results({ questions, selected, flagged, timeSpent, elapsed, mode, poolLabel, testId, subjects, systems, openReview, newBlock }) {
+  const [tab, setTab] = useState("results");
+  const tableRef = useRef(null);
+
+  const subjectName = (id) => subjects.find((s) => s.id === id)?.name || "—";
+  const sysOf = {};
+  subjects.forEach((s) => (sysOf[s.id] = s.system_id));
+  const sysName = {};
+  systems.forEach((s) => (sysName[s.id] = s.name));
+  const systemName = (subId) => sysName[sysOf[subId]] || "—";
+
   const total = questions.length;
   const correct = questions.filter((q) => selected[q.id] === q.correct_answer).length;
   const pct = total ? Math.round((correct / total) * 100) : 0;
-  const [onlyFlagged, setOnlyFlagged] = useState(false);
+  const totalTime = Object.values(timeSpent).reduce((a, b) => a + b, 0) || elapsed;
 
-  const rows = onlyFlagged ? questions.filter((q) => flagged[q.id]) : questions;
+  // per-subject analysis
+  const bySubject = {};
+  questions.forEach((q) => {
+    const k = q.subject_id;
+    if (!bySubject[k]) bySubject[k] = { correct: 0, total: 0 };
+    bySubject[k].total += 1;
+    if (selected[q.id] === q.correct_answer) bySubject[k].correct += 1;
+  });
+
+  const scoreColor = pct >= 70 ? GREEN : pct >= 50 ? AMBER : RED;
 
   return (
-    <div style={{ minHeight: "100vh", background: "#F8FAFC", padding: "40px 20px" }}>
-      <div style={{ maxWidth: 980, margin: "0 auto" }}>
-        <h1 style={{ fontSize: 28, margin: "0 0 24px" }}>Block Summary</h1>
-
-        <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 28 }}>
-          <ScoreRing pct={pct} correct={correct} total={total} />
-          <Stat label="Correct" value={correct} color={GREEN} />
-          <Stat label="Incorrect" value={total - correct} color={RED} />
-          <Stat label="Flagged" value={questions.filter((q) => flagged[q.id]).length} color={AMBER} />
-          {mode === "timed" && <Stat label="Time" value={fmtTime(elapsed)} color={BLUE} />}
-        </div>
-
-        <div style={{ display: "flex", gap: 10, marginBottom: 14 }}>
-          <button onClick={() => setOnlyFlagged(false)} style={onlyFlagged ? ghostBtn : primaryBtn}>
-            All questions
-          </button>
-          <button onClick={() => setOnlyFlagged(true)} style={onlyFlagged ? primaryBtn : ghostBtn}>
-            Review flagged
-          </button>
+    <div style={{ minHeight: "100vh", background: "#F8FAFC", padding: "32px 20px" }}>
+      <div style={{ maxWidth: 1000, margin: "0 auto" }}>
+        {/* header */}
+        <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 20, flexWrap: "wrap" }}>
+          <div>
+            <h1 style={{ fontSize: 24, margin: "0 0 2px" }}>Test Name: Custom Test</h1>
+            <span style={{ fontSize: 13, color: MUTED }}>Test Id: {shortId(testId)}</span>
+          </div>
           <div style={{ flex: 1 }} />
-          <button onClick={newBlock} style={{ ...primaryBtn, background: GREEN }}>
-            New Block
-          </button>
+          <button onClick={() => openReview(0)} style={primaryBtn}>Review Test</button>
+          <button onClick={() => tableRef.current?.scrollIntoView({ behavior: "smooth" })} style={ghostBtn}>Question List</button>
+          <button onClick={newBlock} style={{ ...primaryBtn, background: GREEN }}>New Test</button>
         </div>
 
-        <div style={{ background: "#fff", border: `1px solid ${BORDER}`, borderRadius: 14, overflow: "hidden" }}>
-          {rows.map((q, i) => {
-            const realIdx = questions.indexOf(q);
-            const picked = selected[q.id];
-            const correctAns = picked === q.correct_answer;
-            const answered = picked != null;
-            return (
-              <button
-                key={q.id}
-                onClick={() => openReview(realIdx)}
-                style={{
-                  width: "100%", display: "flex", alignItems: "center", gap: 14,
-                  padding: "14px 18px", border: "none",
-                  borderBottom: i < rows.length - 1 ? `1px solid ${BORDER}` : "none",
-                  background: "#fff", cursor: "pointer", textAlign: "left",
-                }}
-              >
-                <span style={{ width: 28, color: MUTED, fontWeight: 700 }}>{realIdx + 1}</span>
-                <span
-                  style={{
-                    width: 26, height: 26, borderRadius: "50%", flexShrink: 0,
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    color: "#fff", fontWeight: 700,
-                    background: !answered ? "#94A3B8" : correctAns ? GREEN : RED,
-                  }}
-                >
-                  {!answered ? "–" : correctAns ? "✓" : "✗"}
-                </span>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontWeight: 600, color: TEXT }}>{q.topic || "Untitled"}</div>
-                  <div style={{ fontSize: 13, color: MUTED }}>{subjectName(q.subject_id)}</div>
-                </div>
-                {flagged[q.id] && <span style={{ color: AMBER }}>⚑</span>}
-                <span style={{ color: MUTED }}>Review →</span>
-              </button>
-            );
-          })}
-          {rows.length === 0 && (
-            <div style={{ padding: 24, textAlign: "center", color: MUTED }}>No flagged questions.</div>
-          )}
+        {/* tabs */}
+        <div style={{ display: "flex", gap: 4, borderBottom: `1px solid ${BORDER}`, marginBottom: 22 }}>
+          <Tab active={tab === "results"} onClick={() => setTab("results")}>Test Results</Tab>
+          <Tab active={tab === "analysis"} onClick={() => setTab("analysis")}>Test Analysis</Tab>
         </div>
+
+        {tab === "results" ? (
+          <>
+            <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 24 }}>
+              {/* score */}
+              <div style={{ background: "#fff", border: `1px solid ${BORDER}`, borderRadius: 12, padding: "20px 28px", minWidth: 200 }}>
+                <div style={{ fontSize: 13, color: MUTED, marginBottom: 6 }}>Your Score</div>
+                <div style={{ fontSize: 48, fontWeight: 800, color: scoreColor, lineHeight: 1 }}>{pct}%</div>
+                <div style={{ fontSize: 13, color: MUTED, marginTop: 6 }}>{correct} / {total} correct</div>
+              </div>
+              {/* settings */}
+              <div style={{ background: "#fff", border: `1px solid ${BORDER}`, borderRadius: 12, padding: "20px 28px", minWidth: 220 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12 }}>Test Settings</div>
+                <SettingRow label="Mode" value={mode === "timed" ? "Timed" : "Tutored"} />
+                <SettingRow label="Question Pool" value={poolLabel} />
+                <SettingRow label="Questions" value={String(total)} />
+                <SettingRow label="Time" value={fmtTime(totalTime)} />
+              </div>
+              <Stat label="Correct" value={correct} color={GREEN} />
+              <Stat label="Incorrect" value={questions.filter((q) => selected[q.id] != null && selected[q.id] !== q.correct_answer).length} color={RED} />
+              <Stat label="Omitted" value={questions.filter((q) => selected[q.id] == null).length} color={MUTED} />
+            </div>
+
+            {/* question table */}
+            <div ref={tableRef} style={{ background: "#fff", border: `1px solid ${BORDER}`, borderRadius: 14, overflow: "hidden" }}>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                  <thead>
+                    <tr style={{ background: "#F8FAFF", textAlign: "left" }}>
+                      {["#", "Id", "Subject", "System", "Topic", "Result", "Time"].map((h) => (
+                        <th key={h} style={{ padding: "10px 14px", fontSize: 11, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: "0.04em" }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {questions.map((q, i) => {
+                      const picked = selected[q.id];
+                      const ok = picked === q.correct_answer;
+                      const answered = picked != null;
+                      return (
+                        <tr key={q.id} onClick={() => openReview(i)} style={{ cursor: "pointer", borderTop: `1px solid ${BORDER}` }}>
+                          <td style={td}>{i + 1}</td>
+                          <td style={{ ...td, fontFamily: "monospace", color: MUTED }}>{shortId(q.id)}</td>
+                          <td style={td}>{subjectName(q.subject_id)}</td>
+                          <td style={td}>{systemName(q.subject_id)}</td>
+                          <td style={{ ...td, maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{q.topic || "—"}</td>
+                          <td style={td}>
+                            {flagged[q.id] && <span style={{ color: AMBER, marginRight: 6 }}>⚑</span>}
+                            <span style={{ color: !answered ? MUTED : ok ? GREEN : RED, fontWeight: 700 }}>{!answered ? "○" : ok ? "✓" : "✗"}</span>
+                          </td>
+                          <td style={{ ...td, color: MUTED, fontVariantNumeric: "tabular-nums" }}>{fmtTime(timeSpent[q.id] || 0)}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </>
+        ) : (
+          /* ANALYSIS */
+          <div style={{ background: "#fff", border: `1px solid ${BORDER}`, borderRadius: 14, padding: 24 }}>
+            <h3 style={{ margin: "0 0 16px", fontSize: 16 }}>Accuracy by subject</h3>
+            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              {Object.entries(bySubject).map(([sid, v]) => {
+                const p = v.total ? Math.round((v.correct / v.total) * 100) : 0;
+                const c = p >= 70 ? GREEN : p >= 50 ? AMBER : RED;
+                return (
+                  <div key={sid}>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6, fontSize: 14 }}>
+                      <span style={{ fontWeight: 600 }}>{subjectName(sid)}</span>
+                      <span style={{ color: MUTED }}>{v.correct}/{v.total} · {p}%</span>
+                    </div>
+                    <div style={{ height: 8, background: "#F1F5F9", borderRadius: 999 }}>
+                      <div style={{ width: `${p}%`, height: "100%", background: c, borderRadius: 999 }} />
+                    </div>
+                  </div>
+                );
+              })}
+              {Object.keys(bySubject).length === 0 && <p style={{ color: MUTED }}>No data.</p>}
+            </div>
+          </div>
+        )}
       </div>
+    </div>
+  );
+}
+
+function Tab({ active, onClick, children }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{ background: "transparent", border: "none", borderBottom: `2px solid ${active ? BLUE : "transparent"}`, color: active ? BLUE : MUTED, fontWeight: 700, fontSize: 14, padding: "10px 16px", cursor: "pointer", marginBottom: -1 }}
+    >
+      {children}
+    </button>
+  );
+}
+
+function SettingRow({ label, value }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", gap: 16, fontSize: 13, padding: "3px 0" }}>
+      <span style={{ color: MUTED }}>{label}</span>
+      <span style={{ fontWeight: 600 }}>{value}</span>
     </div>
   );
 }
@@ -969,101 +1112,28 @@ function renderHighlighted(text, ranges) {
   return parts;
 }
 
-const primaryBtn = {
-  background: BLUE, color: "#fff", border: "none", borderRadius: 10,
-  padding: "12px 24px", fontWeight: 700, fontSize: 15, cursor: "pointer",
-};
-const ghostBtn = {
-  background: "#fff", color: TEXT, border: `1px solid ${BORDER}`, borderRadius: 10,
-  padding: "10px 18px", fontWeight: 600, fontSize: 14, cursor: "pointer",
-};
-function ModeCard({ active, onClick, title, desc }) {
-  return (
-    <button
-      onClick={onClick}
-      style={{
-        textAlign: "left", padding: "16px 18px", borderRadius: 10, cursor: "pointer",
-        border: `1.5px solid ${active ? BLUE : BORDER}`,
-        background: "#fff",
-      }}
-    >
-      <div style={{ fontWeight: 700, color: TEXT }}>{title}</div>
-      <div style={{ fontSize: 13, color: MUTED, marginTop: 4, lineHeight: 1.5 }}>{desc}</div>
-    </button>
-  );
-}
+const primaryBtn = { background: BLUE, color: "#fff", border: "none", borderRadius: 10, padding: "11px 22px", fontWeight: 700, fontSize: 14, cursor: "pointer" };
+const ghostBtn = { background: "#fff", color: TEXT, border: `1px solid ${BORDER}`, borderRadius: 10, padding: "10px 18px", fontWeight: 600, fontSize: 14, cursor: "pointer" };
+const navBtn = (disabled) => ({ background: disabled ? "#1E293B" : NAVY_2, color: disabled ? "#475569" : "#fff", border: "1px solid #475569", borderRadius: 8, padding: "6px 12px", cursor: disabled ? "not-allowed" : "pointer", fontWeight: 600, fontSize: 13 });
+const td = { padding: "11px 14px", color: TEXT, verticalAlign: "middle" };
 
 function Stat({ label, value, color }) {
   return (
-    <div style={{ background: "#fff", border: `1px solid ${BORDER}`, borderRadius: 12, padding: "16px 22px", minWidth: 120 }}>
+    <div style={{ background: "#fff", border: `1px solid ${BORDER}`, borderRadius: 12, padding: "16px 22px", minWidth: 110 }}>
       <div style={{ fontSize: 26, fontWeight: 800, color }}>{value}</div>
       <div style={{ fontSize: 13, color: MUTED, marginTop: 2 }}>{label}</div>
     </div>
   );
 }
 
-function ScoreRing({ pct, correct, total }) {
-  const color = pct >= 70 ? GREEN : pct >= 50 ? AMBER : RED;
-  return (
-    <div
-      style={{
-        background: "#fff", border: `1px solid ${BORDER}`, borderRadius: 12,
-        padding: 18, display: "flex", alignItems: "center", gap: 16,
-      }}
-    >
-      <div
-        style={{
-          width: 80, height: 80, borderRadius: "50%",
-          background: `conic-gradient(${color} ${pct * 3.6}deg, #E2E8F0 0deg)`,
-          display: "flex", alignItems: "center", justifyContent: "center",
-        }}
-      >
-        <div
-          style={{
-            width: 60, height: 60, borderRadius: "50%", background: "#fff",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            fontWeight: 800, fontSize: 18, color,
-          }}
-        >
-          {pct}%
-        </div>
-      </div>
-      <div>
-        <div style={{ fontSize: 28, fontWeight: 800, color: TEXT }}>
-          {correct} / {total}
-        </div>
-        <div style={{ fontSize: 13, color: MUTED }}>Score</div>
-      </div>
-    </div>
-  );
-}
-
-function Pill({ children, bg, style }) {
-  return (
-    <span style={{ background: bg, padding: "4px 10px", borderRadius: 999, fontSize: 12, fontWeight: 600, ...style }}>
-      {children}
-    </span>
-  );
-}
-
 function IconBtn({ children, onClick }) {
   return (
-    <button
-      onClick={onClick}
-      style={{
-        background: NAVY_2, color: "#fff", border: "1px solid #475569",
-        borderRadius: 6, padding: "4px 8px", cursor: "pointer", fontSize: 13, fontWeight: 700,
-      }}
-    >
+    <button onClick={onClick} style={{ background: "#fff", color: TEXT, border: `1px solid ${BORDER}`, borderRadius: 6, padding: "4px 8px", cursor: "pointer", fontSize: 13, fontWeight: 700 }}>
       {children}
     </button>
   );
 }
 
 function Empty({ children }) {
-  return (
-    <div style={{ padding: 16, border: `1px dashed ${BORDER}`, borderRadius: 10, color: MUTED }}>
-      {children}
-    </div>
-  );
+  return <div style={{ padding: 16, border: `1px dashed ${BORDER}`, borderRadius: 10, color: MUTED }}>{children}</div>;
 }

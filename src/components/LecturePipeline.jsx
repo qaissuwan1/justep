@@ -14,6 +14,7 @@
 import { useEffect, useRef, useState } from "react";
 import Anthropic from "@anthropic-ai/sdk";
 import { supabase } from "../lib/supabase";
+import { useLectures } from "../lib/useLectures";
 import { colors, gradients, font } from "../theme";
 
 const MODEL_FAST = "claude-haiku-4-5-20251001";
@@ -229,6 +230,8 @@ export default function LecturePipeline() {
   const [status, setStatus] = useState(Object.fromEntries(STEPS.map((a) => [a.id, { state: "idle", error: "" }])));
   const [preview, setPreview] = useState(null);
   const [subjectId, setSubjectId] = useState("");
+  const [lectureId, setLectureId] = useState("");
+  const lectures = useLectures(subjectId);
   const [msg, setMsg] = useState(null);
   const [publishing, setPublishing] = useState(false);
 
@@ -566,6 +569,7 @@ export default function LecturePipeline() {
         seen.add(key);
         qRows.push({
           subject_id: subjectId,
+          lecture_id: lectureId || null,
           topic,
           difficulty: normDiff(q.difficulty),
           stem: q.stem.trim(),
@@ -587,7 +591,7 @@ export default function LecturePipeline() {
 
       const cardRows = preview.flashcards
         .filter((c) => c.front.trim() && c.back.trim())
-        .map((c) => ({ subject_id: subjectId, front: c.front.trim(), back: c.back.trim() }));
+        .map((c) => ({ subject_id: subjectId, lecture_id: lectureId || null, front: c.front.trim(), back: c.back.trim() }));
       let insertedC = 0;
       if (cardRows.length) {
         const { error } = await supabase.from("flashcards").insert(cardRows);
@@ -691,10 +695,23 @@ export default function LecturePipeline() {
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 16, marginBottom: 18, flexWrap: "wrap" }}>
             <div style={{ fontSize: 15, fontWeight: 700 }}>3 · Review &amp; publish — {preview.questions.length} question{preview.questions.length === 1 ? "" : "s"}, {preview.flashcards.length} flashcard{preview.flashcards.length === 1 ? "" : "s"}</div>
             <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-              <select value={subjectId} onChange={(e) => setSubjectId(e.target.value)} style={{ ...input, width: 200 }}>
+              <select
+                value={subjectId}
+                onChange={(e) => {
+                  setSubjectId(e.target.value);
+                  setLectureId("");
+                }}
+                style={{ ...input, width: 180 }}
+              >
                 {subjects.length === 0 && <option value="">No subjects — add one first</option>}
                 {subjects.map((s) => (
                   <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </select>
+              <select value={lectureId} onChange={(e) => setLectureId(e.target.value)} style={{ ...input, width: 180 }} disabled={!subjectId}>
+                <option value="">— No lecture —</option>
+                {lectures.map((l) => (
+                  <option key={l.id} value={l.id}>{l.title}</option>
                 ))}
               </select>
               <PrimaryBtn disabled={publishing} onClick={publish}>{publishing ? "Publishing…" : "Publish to bank →"}</PrimaryBtn>

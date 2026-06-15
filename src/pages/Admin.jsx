@@ -6,6 +6,7 @@ import StudentAnalytics from "../components/StudentAnalytics";
 import LecturePipeline from "../components/LecturePipeline";
 import ImportJson from "../components/ImportJson";
 import { computeStreak, dayKey } from "../lib/progress";
+import { useLectures } from "../lib/useLectures";
 
 // Bootstrap allowlist so the panel is reachable before any profile has role='admin'.
 // Primary gate is profiles.role === 'admin' (see migration 003).
@@ -18,6 +19,7 @@ const ADMIN_NAV = [
   { id: "questions", icon: "📋", label: "Manage Questions" },
   { id: "flashcards", icon: "🃏", label: "Manage Flashcards" },
   { id: "subjects", icon: "📚", label: "Manage Subjects" },
+  { id: "lectures", icon: "🎓", label: "Manage Lectures" },
   { id: "systems", icon: "🗂️", label: "Manage Systems" },
   { id: "users", icon: "👥", label: "User Management" },
   { id: "analytics", icon: "📊", label: "Analytics" },
@@ -262,13 +264,14 @@ function UploadLecture() {
 // ════════════════════════════════════════════════════════════════════════════
 // Question add/edit form (modal)
 // ════════════════════════════════════════════════════════════════════════════
-const blankQuestion = { subject_id: "", topic: "", difficulty: "medium", stem: "", options: ["", "", "", ""], correct_answer: 0, explanation: "", board_trap: "", high_yield: "" };
+const blankQuestion = { subject_id: "", lecture_id: "", topic: "", difficulty: "medium", stem: "", options: ["", "", "", ""], correct_answer: 0, explanation: "", board_trap: "", high_yield: "" };
 
 function QuestionForm({ subjects, initial, onClose, onSaved }) {
-  const [q, setQ] = useState(() => ({ ...blankQuestion, ...initial, options: initial?.options?.length ? [...initial.options] : ["", "", "", ""], subject_id: initial?.subject_id || subjects[0]?.id || "" }));
+  const [q, setQ] = useState(() => ({ ...blankQuestion, ...initial, options: initial?.options?.length ? [...initial.options] : ["", "", "", ""], subject_id: initial?.subject_id || subjects[0]?.id || "", lecture_id: initial?.lecture_id || "" }));
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
   const editing = !!initial?.id;
+  const lectures = useLectures(q.subject_id);
 
   const setOpt = (i, v) => setQ((p) => ({ ...p, options: p.options.map((o, oi) => (oi === i ? v : o)) }));
 
@@ -288,6 +291,7 @@ function QuestionForm({ subjects, initial, onClose, onSaved }) {
       explanation: q.explanation.trim(),
       board_trap: q.board_trap.trim() || null,
       high_yield: q.high_yield.trim() || null,
+      lecture_id: q.lecture_id || null,
     };
     const res = editing
       ? await supabase.from("questions").update(payload).eq("id", initial.id)
@@ -313,7 +317,7 @@ function QuestionForm({ subjects, initial, onClose, onSaved }) {
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
         <div>
           <FieldLabel>Subject</FieldLabel>
-          <select value={q.subject_id} onChange={(e) => setQ({ ...q, subject_id: e.target.value })} style={inputStyle}>
+          <select value={q.subject_id} onChange={(e) => setQ({ ...q, subject_id: e.target.value, lecture_id: "" })} style={inputStyle}>
             {subjects.map((s) => (
               <option key={s.id} value={s.id}>{s.name}</option>
             ))}
@@ -327,6 +331,15 @@ function QuestionForm({ subjects, initial, onClose, onSaved }) {
             ))}
           </select>
         </div>
+      </div>
+      <div style={{ marginBottom: 14 }}>
+        <FieldLabel>Lecture (optional)</FieldLabel>
+        <select value={q.lecture_id} onChange={(e) => setQ({ ...q, lecture_id: e.target.value })} style={inputStyle}>
+          <option value="">— No lecture —</option>
+          {lectures.map((l) => (
+            <option key={l.id} value={l.id}>{l.title}</option>
+          ))}
+        </select>
       </div>
       <div style={{ marginBottom: 14 }}>
         <FieldLabel>Topic</FieldLabel>
@@ -783,6 +796,237 @@ function ManageSubjects() {
       )}
 
       {editing && <SubjectForm initial={editing.id ? editing : null} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} />}
+    </>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// MANAGE LECTURES
+// ════════════════════════════════════════════════════════════════════════════
+function LectureForm({ subjects, defaultSubject, initial, nextOrder, onClose, onSaved }) {
+  const [l, setL] = useState({
+    subject_id: initial?.subject_id || defaultSubject || subjects[0]?.id || "",
+    title: initial?.title || "",
+    description: initial?.description || "",
+    order_index: initial?.order_index ?? nextOrder ?? 0,
+  });
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
+  const editing = !!initial?.id;
+
+  const save = async () => {
+    setErr("");
+    if (!l.subject_id) return setErr("Choose a subject.");
+    if (!l.title.trim()) return setErr("Lecture title is required.");
+    setSaving(true);
+    const payload = {
+      subject_id: l.subject_id,
+      title: l.title.trim(),
+      description: l.description.trim() || null,
+      order_index: Number(l.order_index) || 0,
+    };
+    const res = editing
+      ? await supabase.from("lectures").update(payload).eq("id", initial.id)
+      : await supabase.from("lectures").insert(payload);
+    setSaving(false);
+    if (res.error) return setErr(res.error.message);
+    onSaved();
+  };
+
+  return (
+    <Modal
+      title={editing ? "Edit lecture" : "Add lecture"}
+      onClose={onClose}
+      footer={
+        <>
+          <GhostButton onClick={onClose}>Cancel</GhostButton>
+          <PrimaryButton onClick={save} style={{ opacity: saving ? 0.7 : 1, pointerEvents: saving ? "none" : "auto" }}>{saving ? "Saving…" : "Save"}</PrimaryButton>
+        </>
+      }
+    >
+      {err && <Banner>{err}</Banner>}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 110px", gap: 14, marginBottom: 14 }}>
+        <div>
+          <FieldLabel>Subject</FieldLabel>
+          <select value={l.subject_id} onChange={(e) => setL({ ...l, subject_id: e.target.value })} style={inputStyle}>
+            {subjects.map((s) => (
+              <option key={s.id} value={s.id}>{s.name}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <FieldLabel>Order</FieldLabel>
+          <input type="number" value={l.order_index} onChange={(e) => setL({ ...l, order_index: e.target.value })} style={inputStyle} />
+        </div>
+      </div>
+      <div style={{ marginBottom: 14 }}>
+        <FieldLabel>Title</FieldLabel>
+        <input value={l.title} onChange={(e) => setL({ ...l, title: e.target.value })} placeholder="e.g. Lecture 1 — Cell Injury" style={inputStyle} />
+      </div>
+      <div>
+        <FieldLabel>Description</FieldLabel>
+        <textarea value={l.description} onChange={(e) => setL({ ...l, description: e.target.value })} rows={2} placeholder="What this lecture covers" style={{ ...inputStyle, resize: "vertical" }} />
+      </div>
+    </Modal>
+  );
+}
+
+function ManageLectures() {
+  const subjects = useSubjects();
+  const [subjectId, setSubjectId] = useState("");
+  const [rows, setRows] = useState([]);
+  const [qCount, setQCount] = useState({});
+  const [fCount, setFCount] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  const [editing, setEditing] = useState(null);
+  const [reloadKey, setReloadKey] = useState(0);
+  const bump = () => setReloadKey((k) => k + 1);
+
+  // Falls back to the first subject until the user picks one explicitly.
+  const activeSubject = subjectId || subjects[0]?.id || "";
+
+  useEffect(() => {
+    if (!activeSubject) return;
+    let active = true;
+    (async () => {
+      setLoading(true);
+      const [lec, q, f] = await Promise.all([
+        supabase.from("lectures").select("*").eq("subject_id", activeSubject).order("order_index").order("title"),
+        supabase.from("questions").select("lecture_id").eq("subject_id", activeSubject),
+        supabase.from("flashcards").select("lecture_id").eq("subject_id", activeSubject),
+      ]);
+      if (!active) return;
+      if (lec.error) setErr(lec.error.message);
+      else {
+        setErr("");
+        setRows(lec.data || []);
+        const tally = (arr) => {
+          const m = {};
+          (arr || []).forEach((r) => {
+            if (r.lecture_id) m[r.lecture_id] = (m[r.lecture_id] || 0) + 1;
+          });
+          return m;
+        };
+        setQCount(tally(q.data));
+        setFCount(tally(f.data));
+      }
+      setLoading(false);
+    })();
+    return () => {
+      active = false;
+    };
+  }, [activeSubject, reloadKey]);
+
+  const remove = async (id) => {
+    if (!window.confirm("Delete this lecture? Its questions and flashcards are kept but become unassigned.")) return;
+    const { error } = await supabase.from("lectures").delete().eq("id", id);
+    if (error) setErr(error.message);
+    else bump();
+  };
+
+  // Reorder by swapping positions, then normalize order_index to 0..n-1 so it
+  // sticks regardless of whatever the previous values were.
+  const move = async (idx, dir) => {
+    const next = idx + dir;
+    if (next < 0 || next >= rows.length) return;
+    const reordered = [...rows];
+    [reordered[idx], reordered[next]] = [reordered[next], reordered[idx]];
+    setRows(reordered.map((l, i) => ({ ...l, order_index: i }))); // optimistic
+    const results = await Promise.all(
+      reordered.map((l, i) => supabase.from("lectures").update({ order_index: i }).eq("id", l.id))
+    );
+    const bad = results.find((r) => r.error);
+    if (bad) {
+      setErr(bad.error.message);
+      bump();
+    }
+  };
+
+  return (
+    <>
+      <AdminHeader
+        title="Manage Lectures"
+        subtitle="Organize each subject's content into lectures"
+        right={
+          <PrimaryButton onClick={() => setEditing({})} style={activeSubject ? undefined : { opacity: 0.5, pointerEvents: "none" }}>
+            + Add lecture
+          </PrimaryButton>
+        }
+      />
+      {err && <Banner>{err}</Banner>}
+
+      <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
+        <select value={activeSubject} onChange={(e) => setSubjectId(e.target.value)} style={{ ...inputStyle, width: "auto" }}>
+          {subjects.length === 0 && <option value="">No subjects yet</option>}
+          {subjects.map((s) => (
+            <option key={s.id} value={s.id}>{s.name}</option>
+          ))}
+        </select>
+      </div>
+
+      <Card style={{ padding: 0, overflow: "hidden" }}>
+        {!activeSubject ? (
+          <EmptyState icon="📚">Create a subject first, then add lectures to it.</EmptyState>
+        ) : loading ? (
+          <Spinner />
+        ) : rows.length === 0 ? (
+          <EmptyState icon="🎓">No lectures for this subject yet. Add the first one.</EmptyState>
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ background: "#F8FAFF" }}>
+                  <th style={{ ...th, width: 70 }}>Order</th>
+                  <th style={th}>Lecture</th>
+                  <th style={th}>Questions</th>
+                  <th style={th}>Flashcards</th>
+                  <th style={{ ...th, textAlign: "right" }}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((l, i) => (
+                  <tr key={l.id}>
+                    <td style={td}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <span style={{ fontWeight: 700, color: colors.textMuted, width: 18 }}>{i + 1}</span>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                          <button onClick={() => move(i, -1)} disabled={i === 0} style={{ ...iconBtn, padding: "0 6px", lineHeight: 1.3, opacity: i === 0 ? 0.4 : 1 }}>▲</button>
+                          <button onClick={() => move(i, 1)} disabled={i === rows.length - 1} style={{ ...iconBtn, padding: "0 6px", lineHeight: 1.3, opacity: i === rows.length - 1 ? 0.4 : 1 }}>▼</button>
+                        </div>
+                      </div>
+                    </td>
+                    <td style={{ ...td, maxWidth: 420 }}>
+                      <div style={{ fontWeight: 600, marginBottom: 2 }}>{l.title}</div>
+                      {l.description && <div style={{ fontSize: 12, color: colors.textMuted, lineHeight: 1.4 }}>{l.description}</div>}
+                    </td>
+                    <td style={td}>{qCount[l.id] || 0}</td>
+                    <td style={td}>{fCount[l.id] || 0}</td>
+                    <td style={{ ...td, textAlign: "right", whiteSpace: "nowrap" }}>
+                      <button onClick={() => setEditing(l)} style={{ ...iconBtn, marginRight: 6 }}>Edit</button>
+                      <button onClick={() => remove(l.id)} style={{ ...iconBtn, color: colors.red, borderColor: "#FECACA" }}>Delete</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+
+      {editing && (
+        <LectureForm
+          subjects={subjects}
+          defaultSubject={activeSubject}
+          initial={editing.id ? editing : null}
+          nextOrder={rows.length}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
+            bump();
+          }}
+        />
+      )}
     </>
   );
 }
@@ -1274,6 +1518,7 @@ export default function Admin() {
     questions: <ManageQuestions />,
     flashcards: <ManageFlashcards />,
     subjects: <ManageSubjects />,
+    lectures: <ManageLectures />,
     systems: <ManageSystems />,
     users: <UserManagement />,
     analytics: <Analytics />,

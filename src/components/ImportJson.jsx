@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { supabase } from "../lib/supabase";
+import { useLectures } from "../lib/useLectures";
 import { colors, gradients, font } from "../theme";
 
 /* ------------------------------------------------------------------ */
@@ -12,6 +13,8 @@ const DIFFICULTIES = ["easy", "medium", "hard"];
 export default function ImportJson() {
   const [subjects, setSubjects] = useState([]);
   const [subjectId, setSubjectId] = useState("");
+  const [lectureId, setLectureId] = useState("");
+  const lectures = useLectures(subjectId);
   const [raw, setRaw] = useState("");
   const [parsed, setParsed] = useState(null); // { questions:[], flashcards:[] }
   const [errors, setErrors] = useState([]);
@@ -149,6 +152,7 @@ export default function ImportJson() {
           } else {
             toInsert.push({
               subject_id: subjectId,
+              lecture_id: lectureId || null,
               topic: q.topic,
               difficulty: q.difficulty,
               stem: q.stem,
@@ -173,6 +177,7 @@ export default function ImportJson() {
       if (parsed.flashcards.length) {
         const fRows = parsed.flashcards.map((f) => ({
           subject_id: subjectId,
+          lecture_id: lectureId || null,
           front: f.front,
           back: f.back,
         }));
@@ -203,14 +208,31 @@ export default function ImportJson() {
         Paste questions and flashcards JSON (generated in Claude) and publish them straight to the bank — no API cost.
       </p>
 
-      {/* subject */}
+      {/* subject + lecture */}
       <div style={card}>
         <label style={label}>1 · Subject</label>
-        <select value={subjectId} onChange={(e) => setSubjectId(e.target.value)} style={select}>
+        <select
+          value={subjectId}
+          onChange={(e) => {
+            setSubjectId(e.target.value);
+            setLectureId("");
+          }}
+          style={select}
+        >
           <option value="">— Select subject —</option>
           {subjects.map((s) => (
             <option key={s.id} value={s.id}>
               {s.name}
+            </option>
+          ))}
+        </select>
+
+        <label style={{ ...label, marginTop: 16 }}>Lecture (optional)</label>
+        <select value={lectureId} onChange={(e) => setLectureId(e.target.value)} style={select} disabled={!subjectId}>
+          <option value="">— No lecture —</option>
+          {lectures.map((l) => (
+            <option key={l.id} value={l.id}>
+              {l.title}
             </option>
           ))}
         </select>
