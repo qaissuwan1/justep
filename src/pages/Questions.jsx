@@ -64,7 +64,7 @@ export default function Questions() {
   const [pickedSubjects, setPickedSubjects] = useState([]);
   const [pickedLectures, setPickedLectures] = useState([]);
   const [status, setStatus] = useState({ unused: true, incorrect: false, correct: false, marked: false, omitted: false });
-  const [numQuestions, setNumQuestions] = useState(40);
+  const [numQuestions, setNumQuestions] = useState("40"); // raw string; clamped on blur/generate
   const [mode, setMode] = useState("tutor"); // tutor | timed
   const [starting, setStarting] = useState(false);
   const [setupError, setSetupError] = useState("");
@@ -87,10 +87,21 @@ export default function Questions() {
   /* -------- timer -------- */
   const [timeLeft, setTimeLeft] = useState(0);
   const timerRef = useRef(null);
+  const omittedDoneRef = useRef(false); // guards one omitted-record per block
+  // Live snapshot so finishBlock()/recordOmitted() — which can fire from a stale
+  // timer closure in timed mode — always see the latest answers, not block-start.
+  const liveRef = useRef({ questions: [], selected: {}, submitted: {}, reviewMode: false, userQ: [] });
+  const finishRef = useRef(null); // always points at the latest finishBlock
   const [elapsed, setElapsed] = useState(0);
 
-  /* ---------------- load meta + progress + marks ---------------- */
+  /* ---------------- load meta + progress + marks ----------------
+     Re-runs whenever the config screen is shown (phase === "setup"), so that
+     answers/flags made during a block are reflected in the status counts when
+     the user returns here. The component stays mounted across phases, so a
+     once-on-mount load would otherwise go stale. */
   useEffect(() => {
+    if (phase !== "setup") return;
+    let cancelled = false;
     (async () => {
       setLoadingMeta(true);
       const {
@@ -120,10 +131,15 @@ export default function Questions() {
 
       const uq = (qrows || []).map((q) => {
         const l = latest[q.id];
-        const st = !l ? "unused" : l.is_correct ? "correct" : "incorrect";
+        let st;
+        if (!l) st = "unused";
+        else if (l.is_correct === true) st = "correct";
+        else if (l.is_correct === false) st = "incorrect";
+        else st = "omitted"; // is_correct === null → presented but left unanswered
         return { id: q.id, subject_id: q.subject_id, lecture_id: q.lecture_id || null, system_id: sysOf[q.subject_id] || null, status: st };
       });
 
+      if (cancelled) return;
       setSystems(sys || []);
       setSubjects(subjList);
       setLectures(lecs || []);
@@ -131,7 +147,10 @@ export default function Questions() {
       setMarks(new Set((mk.data || []).map((m) => m.question_id)));
       setLoadingMeta(false);
     })();
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [phase]);
 
   /* ---------------- timer tick (timed) ---------------- */
   useEffect(() => {
@@ -140,7 +159,7 @@ export default function Questions() {
       setTimeLeft((t) => {
         if (t <= 1) {
           clearInterval(timerRef.current);
-          finishBlock();
+          finishRef.current?.();
           return 0;
         }
         return t - 1;
@@ -169,6 +188,11 @@ export default function Questions() {
     };
   }, [currentId, phase, reviewMode]);
 
+  // Keep the live snapshot current after every render.
+  useEffect(() => {
+    liveRef.current = { questions, selected, submitted, reviewMode, userQ };
+  });
+
   /* ---------------- generate block ---------------- */
   async function startBlock(ids, n) {
     setSetupError("");
@@ -176,7 +200,8 @@ export default function Questions() {
       setSetupError("No questions match your filters.");
       return;
     }
-    const take = Math.min(Math.max(1, n), ids.length);
+    const parsed = parseInt(n, 10);
+    const take = Math.min(Math.max(1, Number.isNaN(parsed) ? 1 : parsed), ids.length);
     setStarting(true);
     const chosenIds = shuffle(ids).slice(0, take);
     const { data, error } = await supabase.from("questions").select("*").in("id", chosenIds);
@@ -203,6 +228,7 @@ export default function Questions() {
     setTimeSpent({});
     setElapsed(0);
     setReviewMode(false);
+    omittedDoneRef.current = false;
     if (mode === "timed") setTimeLeft(chosen.length * SECONDS_PER_Q);
     setPhase("running");
   }
@@ -291,11 +317,38 @@ export default function Questions() {
   const goPrev = () => idx > 0 && setIdx(idx - 1);
   const jumpTo = (i) => i >= 0 && i < questions.length && setIdx(i);
 
+  // Record questions that were presented but left unanswered as omitted
+  // (user_progress row with is_correct = null). One pass per block.
+  async function recordOmitted() {
+    const live = liveRef.current;
+    if (live.reviewMode || omittedDoneRef.current) return;
+    omittedDoneRef.current = true;
+    // Dedupe: skip questions whose latest attempt is already null (status
+    // "omitted") so repeated skipping doesn't pile up duplicate null rows.
+    const alreadyOmitted = new Set((live.userQ || []).filter((q) => q.status === "omitted").map((q) => q.id));
+    const omittedIds = live.questions
+      .filter((q) => live.selected[q.id] == null && !live.submitted[q.id] && !alreadyOmitted.has(q.id))
+      .map((q) => q.id);
+    if (!omittedIds.length) return;
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) return;
+    await supabase
+      .from("user_progress")
+      .insert(omittedIds.map((qid) => ({ user_id: user.id, question_id: qid, is_correct: null })));
+  }
+
   function finishBlock() {
     clearInterval(timerRef.current);
+    recordOmitted();
     setReviewMode(false);
     setPhase("summary");
   }
+  // Keep finishRef pointing at the current finishBlock for the timed-mode timer.
+  useEffect(() => {
+    finishRef.current = finishBlock;
+  });
 
   function openReview(i) {
     setIdx(i);
@@ -724,7 +777,7 @@ function Setup(props) {
     (status.incorrect && q.status === "incorrect") ||
     (status.correct && q.status === "correct") ||
     (status.marked && marks.has(q.id)) ||
-    (status.omitted && false); // no "omitted" storage yet → always 0
+    (status.omitted && q.status === "omitted");
 
   const inSys = (q) => !pickedSystems.length || pickedSystems.includes(q.system_id);
   const inSub = (q) => !pickedSubjects.length || pickedSubjects.includes(q.subject_id);
@@ -755,7 +808,13 @@ function Setup(props) {
 
   const finalPool = userQ.filter((q) => cascade(q) && passStatus(q));
   const N = finalPool.length;
-  const take = Math.min(Math.max(1, numQuestions), N || 1);
+  // numQuestions is a raw string while typing; clamp to [1, N] for display/use.
+  const clampNum = (raw) => {
+    const n = parseInt(raw, 10);
+    if (Number.isNaN(n)) return 1;
+    return Math.max(1, Math.min(N || 1, n));
+  };
+  const take = clampNum(numQuestions);
 
   const subjectsLocked = pickedSystems.length === 0;
   const lecturesLocked = pickedSubjects.length === 0;
@@ -856,7 +915,8 @@ function Setup(props) {
               min={1}
               max={N}
               value={numQuestions}
-              onChange={(e) => setNumQuestions(Math.max(1, Math.min(N || 1, Number(e.target.value) || 1)))}
+              onChange={(e) => setNumQuestions(e.target.value)}
+              onBlur={() => setNumQuestions(String(clampNum(numQuestions)))}
               style={{ width: 90, padding: "10px 12px", fontSize: 16, border: `1px solid ${BORDER}`, borderRadius: 8 }}
             />
             <span style={{ color: MUTED, fontSize: 14 }}>

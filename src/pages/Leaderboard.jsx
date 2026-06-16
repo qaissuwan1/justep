@@ -20,7 +20,7 @@ export default function Leaderboard() {
       if (user) setMyId(user.id);
 
       const [{ data: profiles }, { data: progress }] = await Promise.all([
-        supabase.from("profiles").select("id,full_name,username,avatar_url"),
+        supabase.from("public_profiles").select("id,full_name,username,avatar_url"),
         supabase.from("user_progress").select("user_id,question_id,is_correct,answered_at"),
       ]);
 
