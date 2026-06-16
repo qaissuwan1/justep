@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { supabase } from "../lib/supabase";
+import useIsMobile from "../lib/useIsMobile";
 
 /* ------------------------------------------------------------------ */
 /*  JUStep — UWorld-style Question Bank                                */
@@ -47,6 +48,7 @@ const shortId = (id) => String(id || "").replace(/-/g, "").slice(0, 8).toUpperCa
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 
 export default function Questions() {
+  const isMobile = useIsMobile();
   const [phase, setPhase] = useState("setup"); // setup | running | summary
 
   /* -------- shared data -------- */
@@ -366,13 +368,13 @@ export default function Questions() {
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 1000, background: "#F8FAFC", display: "flex", flexDirection: "column", color: TEXT }}>
       {/* TOP BAR */}
-      <div style={{ background: NAVY, color: "#fff", padding: "8px 16px", display: "flex", alignItems: "center", gap: 16, flexShrink: 0 }}>
+      <div style={{ background: NAVY, color: "#fff", padding: "8px 16px", display: "flex", alignItems: "center", gap: isMobile ? 8 : 16, flexShrink: 0, flexWrap: isMobile ? "wrap" : "nowrap" }}>
         <div style={{ background: NAVY_2, borderRadius: 8, padding: "6px 12px", fontWeight: 700, fontSize: 14 }}>
           Item: {idx + 1} of {questions.length}
         </div>
-        <span style={{ fontSize: 12, color: "#94A3B8" }}>Question Id: {shortId(qid)}</span>
+        {!isMobile && <span style={{ fontSize: 12, color: "#94A3B8" }}>Question Id: {shortId(qid)}</span>}
 
-        <div style={{ flex: 1 }} />
+        {!isMobile && <div style={{ flex: 1 }} />}
 
         <button onClick={goPrev} disabled={atFirst} style={navBtn(atFirst)}>← Previous</button>
         <span style={{ fontVariantNumeric: "tabular-nums", minWidth: 56, textAlign: "center" }}>{idx + 1} / {questions.length}</span>
@@ -388,12 +390,20 @@ export default function Questions() {
       </div>
 
       {/* MIDDLE — rail + panes */}
-      <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
-        <QuestionRail questions={questions} idx={idx} selected={selected} submitted={submitted} flagged={flagged} reviewMode={reviewMode} onJump={jumpTo} />
+      <div style={{ flex: 1, display: "flex", flexDirection: isMobile ? "column" : "row", minHeight: 0 }}>
+        <QuestionRail questions={questions} idx={idx} selected={selected} submitted={submitted} flagged={flagged} reviewMode={reviewMode} onJump={jumpTo} horizontal={isMobile} />
 
-        <div style={{ flex: 1, display: "flex", flexDirection: splitVertical ? "column" : "row", minWidth: 0 }}>
+        <div
+          style={{
+            flex: 1,
+            minWidth: 0,
+            display: "flex",
+            flexDirection: isMobile || splitVertical ? "column" : "row",
+            overflowY: isMobile ? "auto" : "visible",
+          }}
+        >
           {/* MAIN PANE */}
-          <div style={{ flex: 1, minWidth: 0, overflowY: "auto", padding: 24 }}>
+          <div style={{ flex: 1, minWidth: 0, overflowY: isMobile ? "visible" : "auto", padding: isMobile ? 16 : 24 }}>
             <div style={{ maxWidth: 760, margin: "0 auto" }}>
               {/* Mark Question + font size */}
               <div style={{ display: "flex", alignItems: "center", marginBottom: 18 }}>
@@ -513,7 +523,7 @@ export default function Questions() {
 
           {/* EXPLANATION PANE */}
           {reveal && (
-            <div style={{ flex: 1, minWidth: 0, overflowY: "auto", borderLeft: splitVertical ? "none" : `1px solid ${BORDER}`, borderTop: splitVertical ? `1px solid ${BORDER}` : "none", background: "#fff", padding: 24 }}>
+            <div style={{ flex: 1, minWidth: 0, overflowY: isMobile ? "visible" : "auto", borderLeft: isMobile || splitVertical ? "none" : `1px solid ${BORDER}`, borderTop: isMobile || splitVertical ? `1px solid ${BORDER}` : "none", background: "#fff", padding: isMobile ? 16 : 24 }}>
               <div style={{ maxWidth: 760, margin: "0 auto" }}>
                 <div style={{ display: "inline-block", fontSize: 13, fontWeight: 700, color: BLUE, borderBottom: `2px solid ${BLUE}`, paddingBottom: 6, marginBottom: 16 }}>Explanation</div>
                 <p style={{ fontSize, lineHeight: 1.7, color: "#334155", whiteSpace: "pre-wrap", margin: 0 }}>{current.explanation || "No explanation provided."}</p>
@@ -538,15 +548,17 @@ export default function Questions() {
       </div>
 
       {/* BOTTOM BAR */}
-      <div style={{ background: NAVY, color: "#fff", padding: "8px 16px", display: "flex", alignItems: "center", gap: 16, flexShrink: 0 }}>
-        <span style={{ fontSize: 12, color: "#94A3B8" }}>Test Id: {shortId(testId)}</span>
+      <div style={{ background: NAVY, color: "#fff", padding: "8px 16px", display: "flex", alignItems: "center", gap: isMobile ? 10 : 16, flexShrink: 0 }}>
+        {!isMobile && <span style={{ fontSize: 12, color: "#94A3B8" }}>Test Id: {shortId(testId)}</span>}
         <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.08em", color: AMBER }}>
           {reviewMode ? "REVIEW" : mode === "timed" ? "TIMED" : "TUTOR"}
         </span>
         <div style={{ flex: 1 }} />
-        <button onClick={() => setSplitVertical((v) => !v)} style={navBtn(false)} title="Toggle layout">
-          ▤ Layout
-        </button>
+        {!isMobile && (
+          <button onClick={() => setSplitVertical((v) => !v)} style={navBtn(false)} title="Toggle layout">
+            ▤ Layout
+          </button>
+        )}
         {reviewMode ? (
           <button onClick={() => setPhase("summary")} style={{ ...navBtn(false), background: BLUE, borderColor: BLUE }}>Back to Results</button>
         ) : (
@@ -560,31 +572,70 @@ export default function Questions() {
 /* ================================================================== */
 /*  IN-TEST: LEFT RAIL                                                */
 /* ================================================================== */
-function QuestionRail({ questions, idx, selected, submitted, flagged, reviewMode, onJump }) {
+function QuestionRail({ questions, idx, selected, submitted, flagged, reviewMode, onJump, horizontal }) {
+  const statusOf = (q, i) => {
+    const isAnswered = submitted[q.id] || reviewMode;
+    const picked = selected[q.id];
+    let glyph = null;
+    let color = MUTED;
+    if (isAnswered && picked != null) {
+      if (picked === q.correct_answer) { glyph = "✓"; color = GREEN; }
+      else { glyph = "✗"; color = RED; }
+    } else if (isAnswered) {
+      glyph = "○";
+    } else if (i === idx) {
+      glyph = "●";
+      color = BLUE;
+    }
+    return { glyph, color };
+  };
+
+  // Mobile: a horizontal scrolling strip of numbered chips instead of a left rail.
+  if (horizontal) {
+    return (
+      <div style={{ display: "flex", gap: 6, overflowX: "auto", padding: "8px 12px", borderBottom: `1px solid ${BORDER}`, background: "#fff", flexShrink: 0 }}>
+        {questions.map((q, i) => {
+          const { glyph, color } = statusOf(q, i);
+          const current = i === idx;
+          return (
+            <button
+              key={q.id}
+              onClick={() => onJump(i)}
+              aria-label={`Question ${i + 1}`}
+              style={{
+                position: "relative",
+                flexShrink: 0,
+                minWidth: 38,
+                height: 38,
+                borderRadius: 8,
+                border: current ? `2px solid ${BLUE}` : `1px solid ${BORDER}`,
+                background: current ? BLUE_SOFT : "#fff",
+                cursor: "pointer",
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                justifyContent: "center",
+                lineHeight: 1,
+                padding: "0 6px",
+              }}
+            >
+              <span style={{ fontSize: 12, fontWeight: 700, color: color === MUTED ? TEXT : color }}>{i + 1}</span>
+              {glyph && <span style={{ fontSize: 9, color, marginTop: 1 }}>{glyph}</span>}
+              {flagged[q.id] && <span style={{ position: "absolute", top: -4, right: -2, color: AMBER, fontSize: 10 }}>⚑</span>}
+            </button>
+          );
+        })}
+      </div>
+    );
+  }
+
   return (
     <div style={{ width: 200, flexShrink: 0, borderRight: `1px solid ${BORDER}`, background: "#fff", overflowY: "auto" }}>
       <div style={{ padding: "12px 14px", fontSize: 11, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: "0.05em", borderBottom: `1px solid ${BORDER}`, position: "sticky", top: 0, background: "#fff" }}>
         Question Status
       </div>
       {questions.map((q, i) => {
-        const isAnswered = submitted[q.id] || reviewMode;
-        const picked = selected[q.id];
-        let glyph = null;
-        let color = MUTED;
-        if (isAnswered && picked != null) {
-          if (picked === q.correct_answer) {
-            glyph = "✓";
-            color = GREEN;
-          } else {
-            glyph = "✗";
-            color = RED;
-          }
-        } else if (isAnswered) {
-          glyph = "○";
-        } else if (i === idx) {
-          glyph = "●";
-          color = BLUE;
-        }
+        const { glyph, color } = statusOf(q, i);
         const current = i === idx;
         return (
           <button
@@ -641,6 +692,7 @@ function Setup(props) {
     startBlock, starting, setupError,
   } = props;
 
+  const isMobile = useIsMobile();
   const toggleStatus = (k) => setStatus((s) => ({ ...s, [k]: !s[k] }));
 
   // cascading toggles with locking + child-clearing
@@ -724,7 +776,7 @@ function Setup(props) {
 
   return (
     <div style={{ minHeight: "100vh", background: "#F8FAFC", color: TEXT }}>
-      <div style={{ maxWidth: 920, margin: "0 auto", padding: "32px 20px 110px" }}>
+      <div style={{ maxWidth: 920, margin: "0 auto", padding: isMobile ? "20px 14px 120px" : "32px 20px 110px" }}>
         <h1 style={{ fontSize: 26, margin: "0 0 4px" }}>Create Test</h1>
         <p style={{ color: MUTED, margin: "0 0 28px", fontSize: 14 }}>Build a custom question block.</p>
 
@@ -756,7 +808,7 @@ function Setup(props) {
               {systems.length === 0 ? (
                 <Empty>No systems configured yet.</Empty>
               ) : (
-                <Grid>
+                <Grid single={isMobile}>
                   {systems.map((s) => (
                     <CheckRow key={s.id} on={pickedSystems.includes(s.id)} onClick={() => toggleSystem(s.id)} label={s.name} count={sysCount[s.id] || 0} />
                   ))}
@@ -770,7 +822,7 @@ function Setup(props) {
               ) : shownSubjects.length === 0 ? (
                 <Empty>No subjects for the selected systems.</Empty>
               ) : (
-                <Grid>
+                <Grid single={isMobile}>
                   {shownSubjects.map((s) => (
                     <CheckRow key={s.id} on={pickedSubjects.includes(s.id)} onClick={() => toggleSubject(s.id)} label={s.name} count={subCount[s.id] || 0} />
                   ))}
@@ -784,7 +836,7 @@ function Setup(props) {
               ) : shownLectures.length === 0 ? (
                 <Empty>No lectures for the selected subjects.</Empty>
               ) : (
-                <Grid>
+                <Grid single={isMobile}>
                   {shownLectures.map((l) => (
                     <CheckRow key={l.id} on={pickedLectures.includes(l.id)} onClick={() => toggleLecture(l.id)} label={l.title} count={lecCount[l.id] || 0} />
                   ))}
@@ -854,8 +906,8 @@ function Section({ title, children, locked, master, totalPill }) {
   );
 }
 
-function Grid({ children }) {
-  return <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 14 }}>{children}</div>;
+function Grid({ children, single }) {
+  return <div style={{ display: "grid", gridTemplateColumns: single ? "1fr" : "repeat(2, 1fr)", gap: 14 }}>{children}</div>;
 }
 
 function CheckRow({ on, onClick, label, count }) {

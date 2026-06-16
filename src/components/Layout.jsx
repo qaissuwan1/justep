@@ -1,8 +1,11 @@
 // Authenticated app shell: navy sidebar + main content via <Outlet />.
+// Desktop: fixed 220px sidebar. Mobile (<=768px): sidebar becomes a slide-in
+// drawer behind a hamburger top bar, and main content goes full-width.
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { colors, gradients, font } from "../theme";
 import { supabase } from "../lib/supabase";
+import useIsMobile from "../lib/useIsMobile";
 
 const navItems = [
   { to: "/app/home", icon: "⊞", label: "Dashboard" },
@@ -32,6 +35,9 @@ const navLinkStyle = ({ isActive }) => ({
 
 export default function Layout() {
   const navigate = useNavigate();
+  const isMobile = useIsMobile();
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const closeDrawer = () => setDrawerOpen(false);
   const [user, setUser] = useState(null);
   const [isAdmin, setIsAdmin] = useState(false);
 
@@ -65,6 +71,60 @@ export default function Layout() {
 
   return (
     <div style={{ fontFamily: font, background: colors.bg, minHeight: "100vh", display: "flex", color: colors.text }}>
+      {/* Mobile top bar */}
+      {isMobile && (
+        <header
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            height: 56,
+            background: colors.card,
+            borderBottom: `1px solid ${colors.line}`,
+            display: "flex",
+            alignItems: "center",
+            gap: 12,
+            padding: "0 16px",
+            zIndex: 20,
+          }}
+        >
+          <button
+            onClick={() => setDrawerOpen(true)}
+            aria-label="Open menu"
+            style={{ background: "transparent", border: "none", fontSize: 22, lineHeight: 1, color: colors.text, cursor: "pointer", padding: 4 }}
+          >
+            ☰
+          </button>
+          <NavLink to="/app/home" onClick={closeDrawer} style={{ textDecoration: "none", display: "flex", alignItems: "center", gap: 8 }}>
+            <div
+              style={{
+                width: 30,
+                height: 30,
+                background: gradients.accent,
+                borderRadius: 8,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: 14,
+                fontWeight: 800,
+                color: "#fff",
+              }}
+            >
+              J
+            </div>
+            <span style={{ fontSize: 18, fontWeight: 800, color: colors.navy, letterSpacing: "-0.5px" }}>
+              JU<span style={{ color: colors.teal }}>step</span>
+            </span>
+          </NavLink>
+        </header>
+      )}
+
+      {/* Mobile drawer overlay */}
+      {isMobile && drawerOpen && (
+        <div onClick={closeDrawer} style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.5)", zIndex: 30 }} />
+      )}
+
       {/* Sidebar */}
       <aside
         style={{
@@ -74,12 +134,17 @@ export default function Layout() {
           flexDirection: "column",
           padding: "28px 0",
           position: "fixed",
+          top: 0,
+          left: 0,
           height: "100vh",
-          zIndex: 10,
+          zIndex: isMobile ? 40 : 10,
+          transform: isMobile && !drawerOpen ? "translateX(-100%)" : "translateX(0)",
+          transition: "transform 0.25s ease",
+          boxShadow: isMobile && drawerOpen ? "0 0 40px rgba(0,0,0,0.4)" : "none",
         }}
       >
         {/* Logo */}
-        <NavLink to="/app/home" style={{ textDecoration: "none", padding: "0 24px 32px" }}>
+        <NavLink to="/app/home" onClick={closeDrawer} style={{ textDecoration: "none", padding: "0 24px 32px" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <div
               style={{
@@ -106,13 +171,13 @@ export default function Layout() {
         {/* Nav */}
         <nav style={{ flex: 1, padding: "0 12px", overflowY: "auto" }}>
           {navItems.map((item) => (
-            <NavLink key={item.to} to={item.to} style={navLinkStyle}>
+            <NavLink key={item.to} to={item.to} onClick={closeDrawer} style={navLinkStyle}>
               <span style={{ fontSize: 16 }}>{item.icon}</span>
               {item.label}
             </NavLink>
           ))}
           {isAdmin && (
-            <NavLink to="/app/admin" style={navLinkStyle}>
+            <NavLink to="/app/admin" onClick={closeDrawer} style={navLinkStyle}>
               <span style={{ fontSize: 16 }}>⚙</span>
               Admin
             </NavLink>
@@ -186,7 +251,13 @@ export default function Layout() {
       </aside>
 
       {/* Main */}
-      <main style={{ marginLeft: 220, flex: 1, padding: "32px 36px", maxWidth: "calc(100vw - 220px)" }}>
+      <main
+        style={
+          isMobile
+            ? { marginLeft: 0, flex: 1, padding: "72px 16px 28px", maxWidth: "100vw", boxSizing: "border-box" }
+            : { marginLeft: 220, flex: 1, padding: "32px 36px", maxWidth: "calc(100vw - 220px)" }
+        }
+      >
         <Outlet />
       </main>
     </div>

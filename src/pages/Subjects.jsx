@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { colors, font } from "../theme";
+import useIsMobile from "../lib/useIsMobile";
 
 /* ------------------------------------------------------------------ */
 /*  Library — 3-column browser: System → Subject → Topic (lecture)    */
@@ -10,6 +11,7 @@ import { colors, font } from "../theme";
 
 export default function Subjects() {
   const navigate = useNavigate();
+  const isMobile = useIsMobile();
   const [loading, setLoading] = useState(true);
 
   const [systems, setSystems] = useState([]);
@@ -86,6 +88,81 @@ export default function Subjects() {
         Browse questions and active recall by system, subject, and topic.
       </p>
 
+      {isMobile ? (
+        <div style={{ border: `1px solid ${colors.line}`, borderRadius: 14, overflow: "hidden", background: colors.card, minHeight: 320 }}>
+          {/* Level 1 — Systems */}
+          {!selSys && (
+            <>
+              <div style={colHeader}>Systems</div>
+              {systems.length === 0 ? (
+                <div style={emptyMsg}>No systems yet.</div>
+              ) : (
+                systems.map((s) => {
+                  const m = sysMeta[s.id] || { subjects: 0, topics: 0 };
+                  return (
+                    <button key={s.id} onClick={() => { setSelSys(s); setSelSub(null); }} style={rowItem(false)}>
+                      <div style={{ flex: 1, textAlign: "left" }}>
+                        <div style={{ fontWeight: 600, fontSize: 14 }}>{s.name}</div>
+                        <div style={{ fontSize: 12, color: colors.textSoft, marginTop: 2 }}>{m.subjects} subjects · {m.topics} topics</div>
+                      </div>
+                      <span style={{ color: colors.textSoft }}>›</span>
+                    </button>
+                  );
+                })
+              )}
+            </>
+          )}
+
+          {/* Level 2 — Subjects */}
+          {selSys && !selSub && (
+            <>
+              <button onClick={() => { setSelSys(null); setSelSub(null); }} style={backRow}>‹ Systems</button>
+              <div style={colHeader}>{selSys.name}</div>
+              {visibleSubjects.length === 0 ? (
+                <div style={emptyMsg}>No subjects in this system.</div>
+              ) : (
+                visibleSubjects.map((s) => {
+                  const m = subMeta[s.id] || { topics: 0 };
+                  return (
+                    <button key={s.id} onClick={() => setSelSub(s)} style={rowItem(false)}>
+                      <div style={{ flex: 1, textAlign: "left" }}>
+                        <div style={{ fontWeight: 600, fontSize: 14, textTransform: "capitalize" }}>{s.name}</div>
+                        <div style={{ fontSize: 12, color: colors.textSoft, marginTop: 2 }}>{m.topics} topics</div>
+                      </div>
+                      <span style={{ color: colors.textSoft }}>›</span>
+                    </button>
+                  );
+                })
+              )}
+            </>
+          )}
+
+          {/* Level 3 — Topics */}
+          {selSub && (
+            <>
+              <button onClick={() => setSelSub(null)} style={backRow}>‹ {selSys?.name || "Subjects"}</button>
+              <div style={colHeader}>{selSub.name}</div>
+              {visibleLectures.length === 0 ? (
+                <div style={emptyMsg}>No topics in this subject yet.</div>
+              ) : (
+                <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 12 }}>
+                  {visibleLectures.map((l) => {
+                    const m = lecMeta[l.id] || { q: 0, qDone: 0, f: 0, fDone: 0 };
+                    return (
+                      <div key={l.id} style={topicCard}>
+                        <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 10 }}>{l.title}</div>
+                        {m.f > 0 && <ProgressRow icon="🧠" label="Active Recall" done={m.fDone} total={m.f} onClick={() => navigate("/app/flashcards")} />}
+                        {m.q > 0 && <ProgressRow icon="📝" label="Questions" done={m.qDone} total={m.q} onClick={() => navigate("/app/questions")} />}
+                        {m.f === 0 && m.q === 0 && <div style={{ fontSize: 12, color: colors.textSoft }}>No content yet.</div>}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      ) : (
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1.3fr", gap: 0, border: `1px solid ${colors.line}`, borderRadius: 14, overflow: "hidden", minHeight: 460, background: colors.card }}>
 
         {/* COLUMN 1 — Systems */}
@@ -163,6 +240,7 @@ export default function Subjects() {
           )}
         </div>
       </div>
+      )}
     </div>
   );
 }
@@ -188,6 +266,11 @@ const rowItem = (active) => ({
   background: active ? "#FEF3C7" : "transparent", cursor: "pointer", fontFamily: font, color: colors.text,
 });
 const topicCard = { border: `1px solid ${colors.line}`, borderRadius: 12, padding: 14 };
+const backRow = {
+  display: "flex", alignItems: "center", gap: 6, width: "100%",
+  padding: "11px 16px", border: "none", borderBottom: `1px solid ${colors.line}`,
+  background: colors.bg, cursor: "pointer", fontFamily: font, color: colors.blue, fontSize: 13, fontWeight: 600,
+};
 const progRow = {
   display: "flex", alignItems: "center", gap: 8, width: "100%", marginTop: 6,
   background: "#EFF4FF", border: "none", borderRadius: 8, padding: "8px 10px", cursor: "pointer", fontFamily: font,

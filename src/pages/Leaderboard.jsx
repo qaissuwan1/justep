@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { supabase } from "../lib/supabase";
 import { colors, font } from "../theme";
+import useIsMobile from "../lib/useIsMobile";
 
 /* ------------------------------------------------------------------ */
 /*  Leaderboard — real rankings from user_progress                    */
@@ -8,6 +9,7 @@ import { colors, font } from "../theme";
 /* ------------------------------------------------------------------ */
 
 export default function Leaderboard() {
+  const isMobile = useIsMobile();
   const [loading, setLoading] = useState(true);
   const [rows, setRows]       = useState([]);
   const [myId, setMyId]       = useState(null);
@@ -74,7 +76,8 @@ export default function Leaderboard() {
           No activity yet — answer some questions to appear here.
         </div>
       ) : (
-        <div style={card}>
+        <div style={{ ...card, overflowX: isMobile ? "auto" : "hidden" }}>
+          <div style={{ minWidth: isMobile ? 500 : "auto" }}>
           {/* header */}
           <div style={headerRow}>
             <span style={{ width:36 }}>#</span>
@@ -119,6 +122,7 @@ export default function Leaderboard() {
               </div>
             );
           })}
+          </div>
         </div>
       )}
     </div>

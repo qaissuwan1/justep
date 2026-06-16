@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { supabase } from "../lib/supabase";
 import { font } from "../theme";
+import useIsMobile from "../lib/useIsMobile";
 
 const DAY = 24 * 60 * 60 * 1000;
 const startOfDay = (d) => { const x = new Date(d); x.setHours(0,0,0,0); return x; };
@@ -54,6 +55,7 @@ const RATE = [
 ];
 
 export default function Flashcards() {
+  const isMobile = useIsMobile();
   const [dark, setDark] = useState(false);
   const [phase, setPhase] = useState("setup"); // setup | review | done
   const [loading, setLoading] = useState(true);
@@ -285,7 +287,7 @@ export default function Flashcards() {
       <span style={{ fontSize: 19, fontWeight: 500, color: headColor }}>{title}</span>
     </div>
   );
-  const grid = { display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 14 };
+  const grid = { display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(2, 1fr)", gap: 14 };
   const divider = { height: 0, borderTop: `0.5px solid ${t.border}`, margin: "24px 0" };
   const subjectsLocked = !sysId;
   const lecturesLocked = multi ? subIds.length === 0 : !subId;
@@ -417,7 +419,7 @@ export default function Flashcards() {
                 Show answer
               </button>
             ) : (
-              <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:8, marginTop:14 }}>
+              <div style={{ display:"grid", gridTemplateColumns:`repeat(${isMobile ? 2 : 4},1fr)`, gap:8, marginTop:14 }}>
                 {RATE.map(r => {
                   const c = dark ? r.d : r.l;
                   return (

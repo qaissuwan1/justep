@@ -458,7 +458,8 @@ const pill = {
 };
 const statsRow = {
   display: "grid",
-  gridTemplateColumns: "repeat(4, 1fr)",
+  // auto-fit + minmax keeps 4 across on desktop, collapses to 2x2 / 1 on phones.
+  gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))",
   gap: 10,
   margin: "-34px 18px 0",
 };
@@ -476,7 +477,7 @@ const cardStyle = {
   boxShadow: "0 1px 6px rgba(0,0,0,0.05)",
 };
 const cardTitle = { fontSize: 15, fontWeight: 700, color: colors.text, margin: "0 0 14px" };
-const twoCol = { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 };
+const twoCol = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 14 };
 const track = { height: 8, borderRadius: 99, background: colors.line, overflow: "hidden" };
 const trackFill = { height: "100%", borderRadius: 99 };
 
