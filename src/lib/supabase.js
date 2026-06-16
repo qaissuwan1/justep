@@ -75,7 +75,6 @@ const hybridStorage = {
 
 export function setRememberMe(remember) {
   const value = remember ? "true" : "false";
-  console.log("[auth] setRememberMe:", value);
   // Stored in localStorage AND a cookie so the choice survives the OAuth
   // redirect even if localStorage is reset along the way.
   localStorage.setItem(REMEMBER_KEY, value);
@@ -86,33 +85,23 @@ export function setRememberMe(remember) {
 // the token to the correct store. Runs on every auth state change, covering
 // email/password and the OAuth redirect alike.
 function enforceRememberPreference() {
-  const { ls, cookie, remember } = readRememberPreference();
-  console.log(
-    `[auth] enforceRememberPreference — localStorage="${ls}" cookie="${cookie}" => remember=${remember}`
-  );
+  const { cookie, remember } = readRememberPreference();
 
   const from = remember ? sessionStorage : localStorage; // where it shouldn't be
   const to = remember ? localStorage : sessionStorage; // where it belongs
-  let moved = 0;
 
   for (const key of Object.keys(from)) {
     if (!AUTH_TOKEN_RE.test(key)) continue;
     const value = from.getItem(key);
     if (value === null) continue;
-    console.log(`[auth] moving ${key} -> ${remember ? "localStorage" : "sessionStorage"}`);
     to.setItem(key, value);
     from.removeItem(key);
-    moved++;
-  }
-  if (moved === 0) {
-    console.log(`[auth] session already in the correct store (${remember ? "localStorage" : "sessionStorage"}), leaving it`);
   }
 
   // Persist the resolved preference back to localStorage so later reads (token
   // refresh, next page load) stay correct, then consume the one-time cookie.
   localStorage.setItem(REMEMBER_KEY, remember ? "true" : "false");
   if (cookie !== null) {
-    console.log("[auth] clearing ju-remember-me cookie (one-time use)");
     clearCookie(REMEMBER_KEY);
   }
 }
