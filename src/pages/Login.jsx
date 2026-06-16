@@ -114,9 +114,9 @@ export default function Login() {
             />
             Remember me
           </label>
-          <a href="#" style={{ fontSize: 13, color: colors.blue, fontWeight: 600, textDecoration: "none" }}>
+          <Link to="/forgot-password" style={{ fontSize: 13, color: colors.blue, fontWeight: 600, textDecoration: "none" }}>
             Forgot password?
-          </a>
+          </Link>
         </div>
 
         <SubmitButton loading={loading} loadingLabel="Signing in…" disabled={busy}>

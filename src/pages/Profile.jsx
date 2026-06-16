@@ -2,38 +2,39 @@ import { useState, useEffect } from "react";
 import { supabase } from "../lib/supabase";
 import { colors, font } from "../theme";
 import { computeStreak, dayKey } from "../lib/progress";
+import { validateUsername } from "../lib/profanity";
 
 /* ------------------------------------------------------------------ */
-/*  Profile — clean stats page (real Supabase data)                   */
+/*  Profile — clean stats page + editable display name (username)     */
 /* ------------------------------------------------------------------ */
 
 export default function Profile() {
   const [loading, setLoading] = useState(true);
+  const [userId, setUserId] = useState(null);
   const [profile, setProfile] = useState(null);
-  const [stats, setStats] = useState({
-    questions: 0,
-    accuracy: 0,
-    cards: 0,
-    daysToExam: null,
-    streak: 0,
-    bySubject: [],
-  });
+  const [stats, setStats] = useState({ questions: 0, accuracy: 0, cards: 0, daysToExam: null, streak: 0, bySubject: [] });
+
+  // username editing
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [saveErr, setSaveErr] = useState(null);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     (async () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) { setLoading(false); return; }
+      setUserId(user.id);
 
       const [{ data: prof }, { data: prog }, { data: fcProg }, { data: subjects }, { data: questions }] =
         await Promise.all([
-          supabase.from("profiles").select("full_name,email,avatar_url").eq("id", user.id).single(),
+          supabase.from("profiles").select("full_name,username,email,avatar_url").eq("id", user.id).single(),
           supabase.from("user_progress").select("question_id,is_correct,answered_at").eq("user_id", user.id),
           supabase.from("flashcard_progress").select("id").eq("user_id", user.id),
           supabase.from("subjects").select("id,name,exam_date"),
           supabase.from("questions").select("id,subject_id"),
         ]);
 
-      // questions + accuracy (latest attempt per question)
       const latest = {};
       (prog || []).forEach((p) => {
         const prev = latest[p.question_id];
@@ -43,72 +44,91 @@ export default function Profile() {
       const correct = attempts.filter((a) => a.is_correct).length;
       const accuracy = attempts.length ? Math.round((correct / attempts.length) * 100) : 0;
 
-      // streak from answered days
       const daysSet = new Set((prog || []).map((p) => dayKey(p.answered_at)));
       const streak = computeStreak(daysSet);
 
-      // soonest upcoming exam
       const now = new Date();
       const upcoming = (subjects || [])
         .filter((s) => s.exam_date && new Date(s.exam_date) >= now)
         .sort((a, b) => new Date(a.exam_date) - new Date(b.exam_date))[0];
-      const daysToExam = upcoming
-        ? Math.ceil((new Date(upcoming.exam_date) - now) / (1000 * 60 * 60 * 24))
-        : null;
+      const daysToExam = upcoming ? Math.ceil((new Date(upcoming.exam_date) - now) / 86400000) : null;
 
-      // accuracy by subject
-      const qSubject = {};
-      (questions || []).forEach((q) => (qSubject[q.id] = q.subject_id));
-      const subjName = {};
-      (subjects || []).forEach((s) => (subjName[s.id] = s.name));
+      const qSubject = {}; (questions || []).forEach((q) => (qSubject[q.id] = q.subject_id));
+      const subjName = {}; (subjects || []).forEach((s) => (subjName[s.id] = s.name));
       const bySub = {};
       attempts.forEach((a) => {
-        const sid = qSubject[a.question_id];
-        if (!sid) return;
+        const sid = qSubject[a.question_id]; if (!sid) return;
         if (!bySub[sid]) bySub[sid] = { total: 0, correct: 0 };
-        bySub[sid].total++;
-        if (a.is_correct) bySub[sid].correct++;
+        bySub[sid].total++; if (a.is_correct) bySub[sid].correct++;
       });
       const bySubject = Object.entries(bySub)
         .map(([sid, v]) => ({ name: subjName[sid] || "—", pct: Math.round((v.correct / v.total) * 100), total: v.total }))
         .sort((a, b) => b.total - a.total);
 
       setProfile(prof || { full_name: user.email, email: user.email });
-      setStats({
-        questions: attempts.length,
-        accuracy,
-        cards: (fcProg || []).length,
-        daysToExam,
-        streak,
-        bySubject,
-      });
+      setDraft(prof?.username || "");
+      setStats({ questions: attempts.length, accuracy, cards: (fcProg || []).length, daysToExam, streak, bySubject });
       setLoading(false);
     })();
   }, []);
 
-  if (loading) {
-    return (
-      <div style={{ display: "flex", justifyContent: "center", paddingTop: 80 }}>
-        <div style={spinner} />
-      </div>
-    );
+  async function saveUsername() {
+    setSaveErr(null);
+    const { ok, error } = validateUsername(draft);
+    if (!ok) { setSaveErr(error); return; }
+    setSaving(true);
+    const { error: dbErr } = await supabase.from("profiles").update({ username: draft.trim() }).eq("id", userId);
+    setSaving(false);
+    if (dbErr) {
+      setSaveErr(dbErr.code === "23505" ? "That username is already taken." : "Could not save. Try again.");
+      return;
+    }
+    setProfile((p) => ({ ...p, username: draft.trim() }));
+    setEditing(false);
   }
 
-  const name = profile?.full_name || profile?.email || "Student";
-  const initial = name.trim().charAt(0).toUpperCase();
+  if (loading) {
+    return <div style={{ display: "flex", justifyContent: "center", paddingTop: 80 }}><div style={spinner} /></div>;
+  }
+
+  // display name priority: username > full_name > email prefix
+  const displayName = profile?.username || profile?.full_name || profile?.email?.split("@")[0] || "Student";
+  const initial = displayName.trim().charAt(0).toUpperCase();
 
   return (
     <div style={{ fontFamily: font, maxWidth: 880, margin: "0 auto", color: colors.text }}>
-      {/* header row */}
+      {/* header */}
       <div style={{ display: "flex", alignItems: "center", gap: 16, padding: "4px 2px 22px" }}>
         <div style={avatar}>{profile?.avatar_url ? <img src={profile.avatar_url} alt="" style={{ width: "100%", height: "100%", borderRadius: "50%" }} /> : initial}</div>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 19, fontWeight: 600 }}>{name}</div>
-          <div style={{ fontSize: 13, color: colors.textSoft, overflow: "hidden", textOverflow: "ellipsis" }}>{profile?.email}</div>
+          {editing ? (
+            <div>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <input
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  placeholder="Choose a display name"
+                  maxLength={24}
+                  style={input}
+                  autoFocus
+                />
+                <button onClick={saveUsername} disabled={saving} style={saveBtn}>{saving ? "Saving…" : "Save"}</button>
+                <button onClick={() => { setEditing(false); setDraft(profile?.username || ""); setSaveErr(null); }} style={cancelBtn}>Cancel</button>
+              </div>
+              {saveErr && <div style={{ color: colors.red, fontSize: 12, marginTop: 6 }}>{saveErr}</div>}
+              <div style={{ fontSize: 12, color: colors.textSoft, marginTop: 6 }}>This is the name shown on the leaderboard.</div>
+            </div>
+          ) : (
+            <>
+              <div style={{ fontSize: 19, fontWeight: 600, display: "flex", alignItems: "center", gap: 10 }}>
+                {displayName}
+                <button onClick={() => setEditing(true)} style={editLink}>Edit name</button>
+              </div>
+              <div style={{ fontSize: 13, color: colors.textSoft }}>{profile?.email}</div>
+            </>
+          )}
         </div>
-        {stats.streak > 0 && (
-          <span style={chip}>{stats.streak}-day streak</span>
-        )}
+        {!editing && stats.streak > 0 && <span style={chip}>{stats.streak}-day streak</span>}
       </div>
 
       {/* stat grid */}
@@ -149,28 +169,11 @@ function Stat({ n, l }) {
   );
 }
 
-const card = {
-  background: colors.card,
-  border: `0.5px solid ${colors.line}`,
-  borderRadius: 14,
-  padding: 20,
-};
-const avatar = {
-  width: 60, height: 60, borderRadius: "50%",
-  background: colors.bg, color: colors.text,
-  display: "flex", alignItems: "center", justifyContent: "center",
-  fontSize: 22, fontWeight: 600, flexShrink: 0,
-  border: `0.5px solid ${colors.line}`,
-};
-const chip = {
-  fontSize: 13, color: colors.textSoft,
-  border: `0.5px solid ${colors.line}`,
-  padding: "5px 12px", borderRadius: 999, whiteSpace: "nowrap",
-};
-const spinner = {
-  width: 32, height: 32,
-  border: `3px solid ${colors.line}`,
-  borderTopColor: colors.blue,
-  borderRadius: "50%",
-  animation: "spin 0.8s linear infinite",
-};
+const card = { background: colors.card, border: `0.5px solid ${colors.line}`, borderRadius: 14, padding: 20 };
+const avatar = { width: 60, height: 60, borderRadius: "50%", background: colors.bg, color: colors.text, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, fontWeight: 600, flexShrink: 0, border: `0.5px solid ${colors.line}` };
+const chip = { fontSize: 13, color: colors.textSoft, border: `0.5px solid ${colors.line}`, padding: "5px 12px", borderRadius: 999, whiteSpace: "nowrap" };
+const editLink = { fontSize: 12, fontWeight: 600, color: colors.blue, background: "none", border: "none", cursor: "pointer", fontFamily: font, padding: 0 };
+const input = { fontSize: 15, padding: "8px 12px", border: `1px solid ${colors.line}`, borderRadius: 8, fontFamily: font, minWidth: 200, color: colors.text };
+const saveBtn = { fontSize: 13, fontWeight: 600, color: "#fff", background: colors.blue, border: "none", borderRadius: 8, padding: "9px 16px", cursor: "pointer", fontFamily: font };
+const cancelBtn = { fontSize: 13, fontWeight: 600, color: colors.textSoft, background: "none", border: `1px solid ${colors.line}`, borderRadius: 8, padding: "9px 16px", cursor: "pointer", fontFamily: font };
+const spinner = { width: 32, height: 32, border: `3px solid ${colors.line}`, borderTopColor: colors.blue, borderRadius: "50%", animation: "spin 0.8s linear infinite" };

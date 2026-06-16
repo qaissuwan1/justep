@@ -5,12 +5,9 @@ import { colors } from "../theme";
 import { supabase, setRememberMe } from "../lib/supabase";
 import { friendlyAuthError, isValidEmail } from "../lib/auth";
 
-const universities = ["University of Jordan", "JUST", "Hashemite University", "Mutah University", "Yarmouk University"];
-const years = ["1st Year", "2nd Year", "3rd Year", "4th Year", "5th Year", "6th Year"];
-
 export default function Signup() {
   const navigate = useNavigate();
-  const [form, setForm] = useState({ name: "", email: "", password: "", university: universities[0], year: years[1] });
+  const [form, setForm] = useState({ name: "", email: "", password: "" });
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [fieldError, setFieldError] = useState({});
@@ -43,7 +40,7 @@ export default function Signup() {
       password: form.password,
       options: {
         // full_name is read by the handle_new_user trigger to populate profiles.
-        data: { full_name: form.name.trim(), university: form.university, year: form.year },
+        data: { full_name: form.name.trim() },
         emailRedirectTo: `${window.location.origin}/app/home`,
       },
     });
@@ -79,18 +76,6 @@ export default function Signup() {
 
   const busy = loading || googleLoading;
   const passwordTooShort = form.password.length > 0 && form.password.length < 8;
-
-  const selectStyle = {
-    width: "100%",
-    padding: "12px 14px",
-    borderRadius: 10,
-    border: `1.5px solid ${colors.line}`,
-    fontSize: 14,
-    outline: "none",
-    color: colors.text,
-    background: "#fff",
-    boxSizing: "border-box",
-  };
 
   return (
     <AuthShell
@@ -149,25 +134,6 @@ export default function Signup() {
           error={fieldError.password || (passwordTooShort ? "Password must be at least 8 characters." : undefined)}
           hint="Use at least 8 characters."
         />
-
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 22 }}>
-          <label style={{ display: "block" }}>
-            <span style={{ fontSize: 13, fontWeight: 600, color: colors.text, display: "block", marginBottom: 6 }}>University</span>
-            <select value={form.university} onChange={set("university")} style={selectStyle}>
-              {universities.map((u) => (
-                <option key={u}>{u}</option>
-              ))}
-            </select>
-          </label>
-          <label style={{ display: "block" }}>
-            <span style={{ fontSize: 13, fontWeight: 600, color: colors.text, display: "block", marginBottom: 6 }}>Year</span>
-            <select value={form.year} onChange={set("year")} style={selectStyle}>
-              {years.map((y) => (
-                <option key={y}>{y}</option>
-              ))}
-            </select>
-          </label>
-        </div>
 
         <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13, color: colors.textSoft, marginBottom: 22, cursor: "pointer" }}>
           <input type="checkbox" required style={{ accentColor: colors.blue, marginTop: 2 }} />

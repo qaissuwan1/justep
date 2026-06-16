@@ -18,7 +18,7 @@ export default function Leaderboard() {
       if (user) setMyId(user.id);
 
       const [{ data: profiles }, { data: progress }] = await Promise.all([
-        supabase.from("profiles").select("id,full_name,email,avatar_url"),
+        supabase.from("profiles").select("id,full_name,username,avatar_url"),
         supabase.from("user_progress").select("user_id,question_id,is_correct,answered_at"),
       ]);
 
@@ -86,7 +86,7 @@ export default function Leaderboard() {
 
           {rows.map((r, i) => {
             const isMe = r.id === myId;
-            const name = r.full_name || r.email?.split("@")[0] || "Student";
+            const name = r.username || r.full_name || "Student";
             const initial = name.trim().charAt(0).toUpperCase();
             const medal = i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : null;
 
