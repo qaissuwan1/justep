@@ -8,7 +8,7 @@ const navItems = [
   { to: "/app/home", icon: "⊞", label: "Dashboard" },
   { to: "/app/questions", icon: "☰", label: "Question Bank" },
   { to: "/app/flashcards", icon: "▣", label: "Flashcards" },
-  { to: "/app/subjects", icon: "◈", label: "Subjects" },
+  { to: "/app/subjects", icon: "◈", label: "Library" },
   { to: "/app/leaderboard", icon: "≡", label: "Leaderboard" },
   { to: "/app/profile", icon: "○", label: "Profile" },
 ];

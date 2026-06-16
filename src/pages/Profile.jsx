@@ -1,196 +1,176 @@
-import { useState } from "react";
-import { mockData, currentUser, colors, gradients } from "../theme";
-import { Card, PageHeader, ProgressBar, StatCard } from "../components/ui";
+import { useState, useEffect } from "react";
+import { supabase } from "../lib/supabase";
+import { colors, font } from "../theme";
+import { computeStreak, dayKey } from "../lib/progress";
 
-const achievements = [
-  { icon: "🔥", title: "Week Warrior", desc: "7-day streak", earned: true },
-  { icon: "🎯", title: "Sharpshooter", desc: "90%+ on a session", earned: true },
-  { icon: "📚", title: "Bookworm", desc: "500 questions done", earned: true },
-  { icon: "🌙", title: "Night Owl", desc: "Study after midnight", earned: true },
-  { icon: "💯", title: "Centurion", desc: "1000 questions", earned: false },
-  { icon: "👑", title: "Top 3", desc: "Reach the podium", earned: false },
-];
+/* ------------------------------------------------------------------ */
+/*  Profile — clean stats page (real Supabase data)                   */
+/* ------------------------------------------------------------------ */
 
 export default function Profile() {
-  const [tab, setTab] = useState("overview");
-  const { subjects } = mockData;
-  const totalDone = subjects.reduce((a, s) => a + s.mastered, 0);
+  const [loading, setLoading] = useState(true);
+  const [profile, setProfile] = useState(null);
+  const [stats, setStats] = useState({
+    questions: 0,
+    accuracy: 0,
+    cards: 0,
+    daysToExam: null,
+    streak: 0,
+    bySubject: [],
+  });
+
+  useEffect(() => {
+    (async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) { setLoading(false); return; }
+
+      const [{ data: prof }, { data: prog }, { data: fcProg }, { data: subjects }, { data: questions }] =
+        await Promise.all([
+          supabase.from("profiles").select("full_name,email,avatar_url").eq("id", user.id).single(),
+          supabase.from("user_progress").select("question_id,is_correct,answered_at").eq("user_id", user.id),
+          supabase.from("flashcard_progress").select("id").eq("user_id", user.id),
+          supabase.from("subjects").select("id,name,exam_date"),
+          supabase.from("questions").select("id,subject_id"),
+        ]);
+
+      // questions + accuracy (latest attempt per question)
+      const latest = {};
+      (prog || []).forEach((p) => {
+        const prev = latest[p.question_id];
+        if (!prev || new Date(p.answered_at) > new Date(prev.answered_at)) latest[p.question_id] = p;
+      });
+      const attempts = Object.values(latest);
+      const correct = attempts.filter((a) => a.is_correct).length;
+      const accuracy = attempts.length ? Math.round((correct / attempts.length) * 100) : 0;
+
+      // streak from answered days
+      const daysSet = new Set((prog || []).map((p) => dayKey(p.answered_at)));
+      const streak = computeStreak(daysSet);
+
+      // soonest upcoming exam
+      const now = new Date();
+      const upcoming = (subjects || [])
+        .filter((s) => s.exam_date && new Date(s.exam_date) >= now)
+        .sort((a, b) => new Date(a.exam_date) - new Date(b.exam_date))[0];
+      const daysToExam = upcoming
+        ? Math.ceil((new Date(upcoming.exam_date) - now) / (1000 * 60 * 60 * 24))
+        : null;
+
+      // accuracy by subject
+      const qSubject = {};
+      (questions || []).forEach((q) => (qSubject[q.id] = q.subject_id));
+      const subjName = {};
+      (subjects || []).forEach((s) => (subjName[s.id] = s.name));
+      const bySub = {};
+      attempts.forEach((a) => {
+        const sid = qSubject[a.question_id];
+        if (!sid) return;
+        if (!bySub[sid]) bySub[sid] = { total: 0, correct: 0 };
+        bySub[sid].total++;
+        if (a.is_correct) bySub[sid].correct++;
+      });
+      const bySubject = Object.entries(bySub)
+        .map(([sid, v]) => ({ name: subjName[sid] || "—", pct: Math.round((v.correct / v.total) * 100), total: v.total }))
+        .sort((a, b) => b.total - a.total);
+
+      setProfile(prof || { full_name: user.email, email: user.email });
+      setStats({
+        questions: attempts.length,
+        accuracy,
+        cards: (fcProg || []).length,
+        daysToExam,
+        streak,
+        bySubject,
+      });
+      setLoading(false);
+    })();
+  }, []);
+
+  if (loading) {
+    return (
+      <div style={{ display: "flex", justifyContent: "center", paddingTop: 80 }}>
+        <div style={spinner} />
+      </div>
+    );
+  }
+
+  const name = profile?.full_name || profile?.email || "Student";
+  const initial = name.trim().charAt(0).toUpperCase();
 
   return (
-    <>
-      <PageHeader title="Profile" subtitle="Your stats, achievements, and account settings" />
-
-      {/* Banner */}
-      <Card style={{ background: gradients.navy, color: "#fff", display: "flex", alignItems: "center", gap: 22, marginBottom: 20 }}>
-        <div
-          style={{
-            width: 78,
-            height: 78,
-            borderRadius: "50%",
-            background: gradients.accent,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            fontSize: 30,
-            fontWeight: 800,
-            border: "3px solid rgba(255,255,255,0.15)",
-          }}
-        >
-          {currentUser.initial}
+    <div style={{ fontFamily: font, maxWidth: 880, margin: "0 auto", color: colors.text }}>
+      {/* header row */}
+      <div style={{ display: "flex", alignItems: "center", gap: 16, padding: "4px 2px 22px" }}>
+        <div style={avatar}>{profile?.avatar_url ? <img src={profile.avatar_url} alt="" style={{ width: "100%", height: "100%", borderRadius: "50%" }} /> : initial}</div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 19, fontWeight: 600 }}>{name}</div>
+          <div style={{ fontSize: 13, color: colors.textSoft, overflow: "hidden", textOverflow: "ellipsis" }}>{profile?.email}</div>
         </div>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 24, fontWeight: 800 }}>{currentUser.name} Suwan</div>
-          <div style={{ fontSize: 14, color: "rgba(255,255,255,0.6)", marginTop: 2 }}>
-            {currentUser.university} · {currentUser.year} · Rank #4
-          </div>
-        </div>
-        <div style={{ display: "flex", gap: 28, textAlign: "center" }}>
-          <div>
-            <div style={{ fontSize: 24, fontWeight: 800 }}>🔥 {mockData.streak}</div>
-            <div style={{ fontSize: 12, color: "rgba(255,255,255,0.5)" }}>Streak</div>
-          </div>
-          <div>
-            <div style={{ fontSize: 24, fontWeight: 800 }}>8,120</div>
-            <div style={{ fontSize: 12, color: "rgba(255,255,255,0.5)" }}>Points</div>
-          </div>
-        </div>
-      </Card>
-
-      {/* Tabs */}
-      <div style={{ display: "flex", gap: 24, borderBottom: `1.5px solid ${colors.line}`, marginBottom: 22 }}>
-        {["overview", "achievements", "settings"].map((t) => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            style={{
-              background: "none",
-              border: "none",
-              borderBottom: tab === t ? `2.5px solid ${colors.blue}` : "2.5px solid transparent",
-              padding: "10px 2px",
-              marginBottom: -1.5,
-              fontSize: 14,
-              fontWeight: 600,
-              cursor: "pointer",
-              color: tab === t ? colors.navy : colors.textMuted,
-              textTransform: "capitalize",
-            }}
-          >
-            {t}
-          </button>
-        ))}
+        {stats.streak > 0 && (
+          <span style={chip}>{stats.streak}-day streak</span>
+        )}
       </div>
 
-      {tab === "overview" && (
-        <>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 16, marginBottom: 20 }}>
-            <StatCard label="Questions done" value="1,265" sub="all time" accent={colors.blue} icon="📋" />
-            <StatCard label="Cards mastered" value={totalDone} sub="across 6 subjects" accent={colors.tealDeep} icon="🃏" />
-            <StatCard label="Avg accuracy" value="84%" sub="last 30 days" accent={colors.green} icon="🎯" />
-            <StatCard label="Best streak" value={`${mockData.bestStreak} days`} sub="personal record" accent={colors.orange} icon="🔥" />
-          </div>
+      {/* stat grid */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 10, marginBottom: 14 }}>
+        <Stat n={stats.questions} l="Questions done" />
+        <Stat n={`${stats.accuracy}%`} l="Accuracy" />
+        <Stat n={stats.cards.toLocaleString()} l="Cards reviewed" />
+        <Stat n={stats.daysToExam != null ? stats.daysToExam : "—"} l={stats.daysToExam != null ? "Days to exam" : "No exam set"} />
+      </div>
 
-          <Card>
-            <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 18 }}>Mastery by subject</div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-              {subjects.map((s) => (
-                <div key={s.name}>
-                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-                    <span style={{ fontSize: 13, fontWeight: 600 }}>{s.name}</span>
-                    <span style={{ fontSize: 12, color: colors.textMuted }}>{s.progress}%</span>
-                  </div>
-                  <ProgressBar value={s.progress} color={s.color} />
-                </div>
-              ))}
-            </div>
-          </Card>
-        </>
-      )}
-
-      {tab === "achievements" && (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 16 }}>
-          {achievements.map((a) => (
-            <Card key={a.title} style={{ textAlign: "center", opacity: a.earned ? 1 : 0.5 }}>
-              <div
-                style={{
-                  width: 56,
-                  height: 56,
-                  borderRadius: 14,
-                  margin: "0 auto 12px",
-                  background: a.earned ? "rgba(56,189,248,0.12)" : "#F1F5F9",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  fontSize: 28,
-                  filter: a.earned ? "none" : "grayscale(1)",
-                }}
-              >
-                {a.icon}
+      {/* accuracy by subject */}
+      <div style={card}>
+        <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 14 }}>Accuracy by subject</div>
+        {stats.bySubject.length === 0 ? (
+          <div style={{ fontSize: 13, color: colors.textSoft }}>Answer some questions to see your breakdown here.</div>
+        ) : (
+          stats.bySubject.map((s) => (
+            <div key={s.name} style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 11 }}>
+              <span style={{ fontSize: 13, width: 120, color: colors.textSoft, textTransform: "capitalize", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.name}</span>
+              <div style={{ flex: 1, height: 6, background: colors.line, borderRadius: 999, overflow: "hidden" }}>
+                <div style={{ width: `${s.pct}%`, height: "100%", background: colors.textSoft, opacity: 0.55 }} />
               </div>
-              <div style={{ fontSize: 14, fontWeight: 700 }}>{a.title}</div>
-              <div style={{ fontSize: 12, color: colors.textMuted, marginTop: 2 }}>{a.desc}</div>
-              {!a.earned && <div style={{ fontSize: 11, color: colors.textMuted, marginTop: 8 }}>🔒 Locked</div>}
-            </Card>
-          ))}
-        </div>
-      )}
-
-      {tab === "settings" && (
-        <Card style={{ maxWidth: 560 }}>
-          <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 18 }}>Account settings</div>
-          {[
-            { label: "Full name", value: `${currentUser.name} Suwan` },
-            { label: "Email", value: currentUser.email },
-            { label: "University", value: currentUser.university },
-            { label: "Year", value: currentUser.year },
-          ].map((row) => (
-            <div key={row.label} style={{ marginBottom: 16 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: colors.text, marginBottom: 6 }}>{row.label}</div>
-              <input
-                defaultValue={row.value}
-                style={{
-                  width: "100%",
-                  padding: "12px 14px",
-                  borderRadius: 10,
-                  border: `1.5px solid ${colors.line}`,
-                  fontSize: 14,
-                  color: colors.text,
-                  outline: "none",
-                }}
-              />
+              <span style={{ fontSize: 13, fontWeight: 500, width: 36, textAlign: "right" }}>{s.pct}%</span>
             </div>
-          ))}
-          <div style={{ display: "flex", gap: 12, marginTop: 8 }}>
-            <button
-              style={{
-                background: gradients.accent,
-                color: "#fff",
-                border: "none",
-                borderRadius: 10,
-                padding: "11px 24px",
-                fontSize: 14,
-                fontWeight: 700,
-                cursor: "pointer",
-              }}
-            >
-              Save changes
-            </button>
-            <button
-              style={{
-                background: "#fff",
-                color: colors.red,
-                border: `1.5px solid ${colors.red}`,
-                borderRadius: 10,
-                padding: "11px 24px",
-                fontSize: 14,
-                fontWeight: 700,
-                cursor: "pointer",
-              }}
-            >
-              Delete account
-            </button>
-          </div>
-        </Card>
-      )}
-    </>
+          ))
+        )}
+      </div>
+    </div>
   );
 }
+
+function Stat({ n, l }) {
+  return (
+    <div style={card}>
+      <div style={{ fontSize: 24, fontWeight: 600, color: colors.text }}>{n}</div>
+      <div style={{ fontSize: 12, color: colors.textSoft, marginTop: 3 }}>{l}</div>
+    </div>
+  );
+}
+
+const card = {
+  background: colors.card,
+  border: `0.5px solid ${colors.line}`,
+  borderRadius: 14,
+  padding: 20,
+};
+const avatar = {
+  width: 60, height: 60, borderRadius: "50%",
+  background: colors.bg, color: colors.text,
+  display: "flex", alignItems: "center", justifyContent: "center",
+  fontSize: 22, fontWeight: 600, flexShrink: 0,
+  border: `0.5px solid ${colors.line}`,
+};
+const chip = {
+  fontSize: 13, color: colors.textSoft,
+  border: `0.5px solid ${colors.line}`,
+  padding: "5px 12px", borderRadius: 999, whiteSpace: "nowrap",
+};
+const spinner = {
+  width: 32, height: 32,
+  border: `3px solid ${colors.line}`,
+  borderTopColor: colors.blue,
+  borderRadius: "50%",
+  animation: "spin 0.8s linear infinite",
+};
