@@ -178,6 +178,49 @@ body{font-family:'Inter',sans-serif;background:#fff;color:#1E2A4A;}
 /* ─── SCENE SWITCHING ─── */
 .d-scene{display:none;}
 .d-scene.active{display:flex;}
+
+/* ─── RESPONSIVE (phones, <=768px) ─── */
+@media (max-width: 768px){
+  /* nav: drop section links, shrink so it fits one row */
+  .nav{padding:0 16px;height:58px;}
+  .nav-links{display:none;}
+  .nav-right{gap:8px;}
+  .nav-link{padding:8px 10px;}
+  .btn-primary{padding:8px 14px;font-size:13px;}
+
+  /* hero: smaller type + padding so headings don't overflow */
+  .hero{padding:44px 20px 36px;}
+  .hero-badge{margin-bottom:20px;font-size:12px;}
+  .hero h1{font-size:32px;letter-spacing:-0.5px;margin-bottom:16px;}
+  .hero-desc{font-size:15px;margin-bottom:28px;}
+  .hero-btn{padding:13px 26px;font-size:14px;}
+
+  /* demo widget: stack the two split panes vertically */
+  .demo-wrap{margin-top:40px;}
+  .d-split,.fc-split{flex-direction:column;height:auto;}
+  .d-left,.d-right,.fc-l,.fc-r{width:100%;}
+  .d-left,.fc-l{border-right:none;border-bottom:1px solid #E2E8F0;}
+  .d-right{min-height:170px;}
+  .d-empty{height:auto;padding:28px 0;}
+  .d-exp{height:auto;}
+  .d-exp-body{flex:none;}
+  .d-bot{flex-wrap:wrap;}
+
+  /* features: single-column cards, smaller section headings */
+  .features{padding:56px 20px;}
+  .section-title{font-size:26px;}
+  .section-sub{font-size:15px;margin-bottom:32px;}
+  .feat-grid{grid-template-columns:1fr;gap:14px;max-width:420px;}
+  .feat-card{padding:22px;}
+
+  /* pricing */
+  .pricing{padding:56px 20px;}
+  .price-card{padding:28px 22px;}
+  .price-val{font-size:44px;}
+
+  /* footer: stack + center */
+  .footer{flex-direction:column;gap:10px;text-align:center;padding:24px 20px;}
+}
 `;
 
 export default function Landing() {
