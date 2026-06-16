@@ -138,8 +138,9 @@ export default function Signup() {
         <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13, color: colors.textSoft, marginBottom: 22, cursor: "pointer" }}>
           <input type="checkbox" required style={{ accentColor: colors.blue, marginTop: 2 }} />
           <span>
-            I agree to the <a href="#" style={{ color: colors.blue, textDecoration: "none" }}>Terms</a> and{" "}
-            <a href="#" style={{ color: colors.blue, textDecoration: "none" }}>Privacy Policy</a>.
+            I agree to the{" "}
+            <Link to="/terms" style={{ color: colors.blue, textDecoration: "none" }}>Terms</Link> and{" "}
+            <Link to="/privacy" style={{ color: colors.blue, textDecoration: "none" }}>Privacy Policy</Link>.
           </span>
         </label>
 

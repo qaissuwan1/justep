@@ -174,6 +174,9 @@ body{font-family:'Inter',sans-serif;background:#fff;color:#1E2A4A;}
 .footer-txt{font-size:13px;font-weight:800;color:#fff;}
 .footer-txt span{color:#38BDF8;}
 .footer-copy{font-size:12px;color:rgba(255,255,255,0.4);}
+.footer-links{display:flex;gap:18px;}
+.footer-link{font-size:13px;color:rgba(255,255,255,0.55);text-decoration:none;transition:color 0.2s;}
+.footer-link:hover{color:#fff;}
 
 /* ─── SCENE SWITCHING ─── */
 .d-scene{display:none;}
@@ -622,6 +625,10 @@ export default function Landing() {
         <div className="footer-logo">
           <div className="logo-sq" style={{ width: "28px", height: "28px", fontSize: "13px" }}>J</div>
           <div className="footer-txt">JU<span>step</span></div>
+        </div>
+        <div className="footer-links">
+          <Link className="footer-link" to="/privacy">Privacy</Link>
+          <Link className="footer-link" to="/terms">Terms</Link>
         </div>
         <div className="footer-copy">© 2026 JUstep. Built for Jordanian medical students.</div>
       </footer>
