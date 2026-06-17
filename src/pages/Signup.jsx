@@ -3,7 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { AuthShell, Field, Divider, GoogleButton, Banner, SubmitButton } from "../components/AuthShell";
 import { colors } from "../theme";
 import { supabase, setRememberMe } from "../lib/supabase";
-import { friendlyAuthError, isValidEmail } from "../lib/auth";
+import { friendlyAuthError, isValidEmail, isExistingUserSignup, isAlreadyRegisteredError } from "../lib/auth";
 
 export default function Signup() {
   const navigate = useNavigate();
@@ -11,6 +11,8 @@ export default function Signup() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [fieldError, setFieldError] = useState({});
+  const [duplicate, setDuplicate] = useState(false); // email already registered
+  const [confirmSent, setConfirmSent] = useState(false); // confirmation email sent
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
 
@@ -26,8 +28,11 @@ export default function Signup() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (loading || googleLoading) return; // prevent double-submit
     setError("");
     setNotice("");
+    setDuplicate(false);
+    setConfirmSent(false);
 
     const errs = validate();
     setFieldError(errs);
@@ -48,6 +53,14 @@ export default function Signup() {
 
     if (error) {
       setError(friendlyAuthError(error));
+      if (isAlreadyRegisteredError(error)) setDuplicate(true);
+      return;
+    }
+    // Supabase returns a user with no identities (and no error) when the email
+    // is already registered — surface it as a duplicate, not a fake success.
+    if (isExistingUserSignup(data)) {
+      setError("An account with this email already exists. Please sign in instead.");
+      setDuplicate(true);
       return;
     }
     if (data.session) {
@@ -56,12 +69,16 @@ export default function Signup() {
     } else {
       // Email confirmation required — no session until they verify.
       setNotice("Account created! Check your email to confirm your account, then sign in.");
+      setConfirmSent(true);
     }
   };
 
   const handleGoogle = async () => {
+    if (loading || googleLoading) return; // prevent double-submit
     setError("");
     setNotice("");
+    setDuplicate(false);
+    setConfirmSent(false);
     setGoogleLoading(true);
     setRememberMe(true); // full_name comes from Google automatically
     const { error } = await supabase.auth.signInWithOAuth({
@@ -94,7 +111,17 @@ export default function Signup() {
       </p>
 
       {error && <Banner type="error">{error}</Banner>}
+      {duplicate && (
+        <Link to="/login" state={{ email: form.email.trim() }} style={ctaLink}>
+          Sign in instead →
+        </Link>
+      )}
       {notice && <Banner type="success">{notice}</Banner>}
+      {confirmSent && (
+        <Link to="/login" state={{ email: form.email.trim() }} style={ctaLink}>
+          Go to sign in →
+        </Link>
+      )}
 
       <form onSubmit={handleSubmit} noValidate>
         <Field
@@ -155,3 +182,12 @@ export default function Signup() {
     </AuthShell>
   );
 }
+
+const ctaLink = {
+  display: "inline-block",
+  margin: "-6px 0 18px",
+  color: colors.blue,
+  fontWeight: 700,
+  fontSize: 14,
+  textDecoration: "none",
+};

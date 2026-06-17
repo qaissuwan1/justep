@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useLocation } from "react-router-dom";
 import { AuthShell, Field, Divider, GoogleButton, Banner, SubmitButton } from "../components/AuthShell";
 import { colors } from "../theme";
 import { supabase, setRememberMe } from "../lib/supabase";
@@ -7,7 +7,9 @@ import { friendlyAuthError, isValidEmail } from "../lib/auth";
 
 export default function Login() {
   const navigate = useNavigate();
-  const [email, setEmail] = useState("");
+  const location = useLocation();
+  // Prefilled when arriving from Signup's "Sign in instead" (router state).
+  const [email, setEmail] = useState(location.state?.email || "");
   const [password, setPassword] = useState("");
   const [remember, setRemember] = useState(true);
   const [error, setError] = useState("");
@@ -17,6 +19,7 @@ export default function Login() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (loading || googleLoading) return; // prevent double-submit
     setError("");
 
     // Client-side validation before hitting the network.
@@ -43,6 +46,7 @@ export default function Login() {
   };
 
   const handleGoogle = async () => {
+    if (loading || googleLoading) return; // prevent double-submit
     setError("");
     setGoogleLoading(true);
     setRememberMe(remember); // honor the checkbox for the OAuth session too

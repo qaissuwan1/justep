@@ -5,6 +5,21 @@ export function isValidEmail(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((email || "").trim());
 }
 
+// Supabase's signUp does NOT throw when the email already exists (anti-account-
+// enumeration). Instead it returns a user object with an EMPTY identities array.
+// Detect that so we can route the user to sign in instead.
+export function isExistingUserSignup(data) {
+  const identities = data?.user?.identities;
+  return Array.isArray(identities) && identities.length === 0;
+}
+
+// True when an explicit Supabase error means the account already exists.
+export function isAlreadyRegisteredError(error) {
+  if (!error) return false;
+  const msg = (error.message || "").toLowerCase();
+  return error.code === "user_already_exists" || msg.includes("already registered") || msg.includes("already been registered");
+}
+
 // Map a Supabase auth error to a clear, friendly sentence. Supabase v2 errors
 // carry a stable `code` plus a `message`; we match on code first, then fall
 // back to message text for older/edge cases.
@@ -24,7 +39,7 @@ export function friendlyAuthError(error) {
     msg.includes("already registered") ||
     msg.includes("already been registered")
   ) {
-    return "An account with this email already exists. Try signing in instead.";
+    return "An account with this email already exists. Please sign in instead.";
   }
   if (code === "weak_password" || msg.includes("password should be") || msg.includes("weak password")) {
     return "That password is too weak. Use at least 8 characters with a mix of letters and numbers.";
