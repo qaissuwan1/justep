@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { AuthShell, Field, Divider, GoogleButton, Banner, SubmitButton } from "../components/AuthShell";
-import { colors, gradients } from "../theme";
+import { colors } from "../theme";
 import { supabase, setRememberMe } from "../lib/supabase";
 import { friendlyAuthError, isValidEmail, isExistingUserSignup, isAlreadyRegisteredError } from "../lib/auth";
 
@@ -11,7 +11,6 @@ export default function Signup() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [fieldError, setFieldError] = useState({});
-  const [duplicate, setDuplicate] = useState(false); // email already registered
   const [confirmSent, setConfirmSent] = useState(false); // confirmation email sent
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
@@ -31,7 +30,6 @@ export default function Signup() {
     if (loading || googleLoading) return; // prevent double-submit
     setError("");
     setNotice("");
-    setDuplicate(false);
     setConfirmSent(false);
 
     const errs = validate();
@@ -51,16 +49,15 @@ export default function Signup() {
     });
     setLoading(false);
 
-    if (error) {
-      setError(friendlyAuthError(error));
-      if (isAlreadyRegisteredError(error)) setDuplicate(true);
+    // Existing account (explicit error, or Supabase's silent empty-identities
+    // case — which also covers Google-registered emails) → straight to sign in
+    // with the email prefilled. No banner, no enumeration.
+    if (isAlreadyRegisteredError(error) || isExistingUserSignup(data)) {
+      navigate("/login", { state: { email: form.email.trim() } });
       return;
     }
-    // Supabase returns a user with no identities (and no error) when the email
-    // is already registered — surface it as a duplicate, not a fake success.
-    if (isExistingUserSignup(data)) {
-      setError("An account with this email already exists. Please sign in instead.");
-      setDuplicate(true);
+    if (error) {
+      setError(friendlyAuthError(error));
       return;
     }
     if (data.session) {
@@ -77,7 +74,6 @@ export default function Signup() {
     if (loading || googleLoading) return; // prevent double-submit
     setError("");
     setNotice("");
-    setDuplicate(false);
     setConfirmSent(false);
     setGoogleLoading(true);
     setRememberMe(true); // full_name comes from Google automatically
@@ -110,18 +106,7 @@ export default function Signup() {
         </Link>
       </p>
 
-      {error && !duplicate && <Banner type="error">{error}</Banner>}
-      {duplicate && (
-        <div style={{ marginBottom: 22 }}>
-          <Banner type="error">This account already exists. Please sign in instead.</Banner>
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            <Link to="/login" state={{ email: form.email.trim() }} style={primaryLink}>
-              Sign in
-            </Link>
-            <GoogleButton onClick={handleGoogle} label="Continue with Google" disabled={busy} />
-          </div>
-        </div>
-      )}
+      {error && <Banner type="error">{error}</Banner>}
       {notice && <Banner type="success">{notice}</Banner>}
       {confirmSent && (
         <Link to="/login" state={{ email: form.email.trim() }} style={ctaLink}>
@@ -196,21 +181,4 @@ const ctaLink = {
   fontWeight: 700,
   fontSize: 14,
   textDecoration: "none",
-};
-
-// Matches AuthShell's SubmitButton (primary) look, as a Link.
-const primaryLink = {
-  display: "block",
-  width: "100%",
-  boxSizing: "border-box",
-  textAlign: "center",
-  background: gradients.accent,
-  color: "#fff",
-  borderRadius: 12,
-  padding: "13px 28px",
-  fontSize: 15,
-  fontWeight: 700,
-  letterSpacing: "0.02em",
-  textDecoration: "none",
-  boxShadow: "0 4px 16px rgba(79,142,247,0.35)",
 };

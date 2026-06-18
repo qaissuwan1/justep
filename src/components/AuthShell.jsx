@@ -215,7 +215,7 @@ export function SubmitButton({ loading, loadingLabel, children, disabled }) {
   );
 }
 
-export function GoogleButton({ onClick, label, disabled }) {
+export function GoogleButton({ onClick, disabled }) {
   return (
     <button
       onClick={onClick}
@@ -223,13 +223,13 @@ export function GoogleButton({ onClick, label, disabled }) {
       disabled={disabled}
       style={{
         width: "100%",
-        padding: "12px 0",
-        borderRadius: 10,
-        border: `1.5px solid ${colors.line}`,
-        background: "#fff",
-        fontSize: 14,
-        fontWeight: 600,
-        color: colors.text,
+        padding: "12px 20px",
+        borderRadius: 12,
+        border: "1px solid #e2e8f0",
+        background: "#ffffff",
+        fontSize: 15,
+        fontWeight: 500,
+        color: "#1a202c",
         cursor: disabled ? "not-allowed" : "pointer",
         opacity: disabled ? 0.6 : 1,
         fontFamily: font,
@@ -237,6 +237,17 @@ export function GoogleButton({ onClick, label, disabled }) {
         alignItems: "center",
         justifyContent: "center",
         gap: 10,
+        boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
+        transition: "background 0.15s, border-color 0.15s",
+      }}
+      onMouseEnter={(e) => {
+        if (disabled) return;
+        e.currentTarget.style.background = "#f8fafc";
+        e.currentTarget.style.borderColor = "#cbd5e0";
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = "#ffffff";
+        e.currentTarget.style.borderColor = "#e2e8f0";
       }}
     >
       <svg width="18" height="18" viewBox="0 0 18 18">
@@ -245,7 +256,7 @@ export function GoogleButton({ onClick, label, disabled }) {
         <path fill="#FBBC05" d="M3.964 10.71c-.18-.54-.282-1.117-.282-1.71s.102-1.17.282-1.71V4.958H.957C.347 6.173 0 7.548 0 9s.348 2.827.957 4.042l3.007-2.332z" />
         <path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0 5.482 0 2.438 2.017.957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z" />
       </svg>
-      {label}
+      Sign in with Google
     </button>
   );
 }
