@@ -77,7 +77,8 @@ export default function Questions() {
   const [struck, setStruck] = useState({}); // qid -> Set(option idx)
   const [flagged, setFlagged] = useState({}); // qid -> true
   const [highlights, setHighlights] = useState({}); // qid -> [{start,end}]
-  const [timeSpent, setTimeSpent] = useState({}); // qid -> seconds
+  const [timeSpent, setTimeSpent] = useState({}); // qid -> accumulated dwell seconds (timer effect)
+  const [answerSecs, setAnswerSecs] = useState({}); // qid -> time-to-answer, frozen at submit (matches DB)
   const [fontSize, setFontSize] = useState(16);
   const [reviewMode, setReviewMode] = useState(false); // from results
   const [splitVertical, setSplitVertical] = useState(false);
@@ -229,6 +230,7 @@ export default function Questions() {
     setFlagged(flags);
     setHighlights({});
     setTimeSpent({});
+    setAnswerSecs({});
     persistedRef.current = new Set();
     setElapsed(0);
     setReviewMode(false);
@@ -271,11 +273,13 @@ export default function Questions() {
   async function persistAttempt(q) {
     if (!q || persistedRef.current.has(q.id)) return;
     persistedRef.current.add(q.id);
+    const t = answerTime(q.id); // time-to-answer, computed once and frozen at submit
+    setAnswerSecs((a) => ({ ...a, [q.id]: t })); // same value the UI displays
     const row = {
       question_id: q.id,
       is_correct: selected[q.id] === q.correct_answer,
       selected_answer: selected[q.id] ?? null,
-      time_spent_seconds: answerTime(q.id), // capture before any await
+      time_spent_seconds: t,
       confidence: null,
     };
     const {
@@ -432,7 +436,7 @@ export default function Questions() {
         questions={questions}
         selected={selected}
         flagged={flagged}
-        timeSpent={timeSpent}
+        answerSecs={answerSecs}
         elapsed={elapsed}
         mode={mode}
         poolLabel={poolLabel}
@@ -601,7 +605,7 @@ export default function Questions() {
                     <ResultCell label={answered || reviewMode ? (isCorrect ? "Correct" : sel == null ? "Omitted" : "Incorrect") : "—"} value="" color={isCorrect ? GREEN : sel == null ? MUTED : RED} big />
                     <ResultCell label="Correct answer" value={LETTERS[current.correct_answer]} />
                     <ResultCell label="% Answered correctly" value="—" />
-                    <ResultCell label="Time spent" value={fmtTime(timeSpent[qid] || 0)} last />
+                    <ResultCell label="Time spent" value={fmtTime(answerSecs[qid] ?? 0)} last />
                   </div>
                 </div>
               )}
@@ -1072,7 +1076,7 @@ function Locked({ children }) {
 /* ================================================================== */
 /*  RESULTS SCREEN                                                    */
 /* ================================================================== */
-function Results({ questions, selected, flagged, timeSpent, elapsed, mode, poolLabel, testId, subjects, systems, openReview, newBlock }) {
+function Results({ questions, selected, flagged, answerSecs, elapsed, mode, poolLabel, testId, subjects, systems, openReview, newBlock }) {
   const [tab, setTab] = useState("results");
   const tableRef = useRef(null);
 
@@ -1086,7 +1090,7 @@ function Results({ questions, selected, flagged, timeSpent, elapsed, mode, poolL
   const total = questions.length;
   const correct = questions.filter((q) => selected[q.id] === q.correct_answer).length;
   const pct = total ? Math.round((correct / total) * 100) : 0;
-  const totalTime = Object.values(timeSpent).reduce((a, b) => a + b, 0) || elapsed;
+  const totalTime = Object.values(answerSecs).reduce((a, b) => a + b, 0) || elapsed;
 
   // per-subject analysis
   const bySubject = {};
@@ -1169,7 +1173,7 @@ function Results({ questions, selected, flagged, timeSpent, elapsed, mode, poolL
                             {flagged[q.id] && <span style={{ color: AMBER, marginRight: 6 }}>⚑</span>}
                             <span style={{ color: !answered ? MUTED : ok ? GREEN : RED, fontWeight: 700 }}>{!answered ? "○" : ok ? "✓" : "✗"}</span>
                           </td>
-                          <td style={{ ...td, color: MUTED, fontVariantNumeric: "tabular-nums" }}>{fmtTime(timeSpent[q.id] || 0)}</td>
+                          <td style={{ ...td, color: MUTED, fontVariantNumeric: "tabular-nums" }}>{fmtTime(answerSecs[q.id] ?? 0)}</td>
                         </tr>
                       );
                     })}
