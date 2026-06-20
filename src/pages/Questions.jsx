@@ -92,6 +92,8 @@ export default function Questions() {
   // timer closure in timed mode — always see the latest answers, not block-start.
   const liveRef = useRef({ questions: [], selected: {}, submitted: {}, reviewMode: false, userQ: [] });
   const finishRef = useRef(null); // always points at the latest finishBlock
+  const qStartRef = useRef(0); // timestamp the current question was shown (for time_spent)
+  const persistedRef = useRef(new Set()); // qids already written to user_progress this block
   const [elapsed, setElapsed] = useState(0);
 
   /* ---------------- load meta + progress + marks ----------------
@@ -182,6 +184,7 @@ export default function Questions() {
   useEffect(() => {
     if (phase !== "running" || reviewMode || !currentId) return;
     const start = Date.now();
+    qStartRef.current = start;
     return () => {
       const secs = Math.round((Date.now() - start) / 1000);
       if (secs > 0) setTimeSpent((ts) => ({ ...ts, [currentId]: (ts[currentId] || 0) + secs }));
@@ -226,6 +229,7 @@ export default function Questions() {
     setFlagged(flags);
     setHighlights({});
     setTimeSpent({});
+    persistedRef.current = new Set();
     setElapsed(0);
     setReviewMode(false);
     omittedDoneRef.current = false;
@@ -252,18 +256,47 @@ export default function Questions() {
     });
   };
 
-  async function submitAnswer() {
-    const q = current;
-    if (q == null || selected[q.id] == null) return;
-    const isCorrect = selected[q.id] === q.correct_answer;
-    setSubmitted((s) => ({ ...s, [q.id]: true }));
+  // Seconds on a question so far = accumulated (prior visits) + the current
+  // uninterrupted view (the timer effect only flushes accumulated time on leave).
+  const answerTime = (id) => {
+    const base = timeSpent[id] || 0;
+    const live = qStartRef.current ? Math.max(0, Math.round((Date.now() - qStartRef.current) / 1000)) : 0;
+    return base + live;
+  };
 
+  // Single write for an attempt: { is_correct, selected_answer, time_spent_seconds,
+  // confidence }. Guarded by persistedRef so each question is written at most once
+  // per block. confidence is always null for now — it's inferred later from
+  // time_spent (fast+correct = confident, slow = hesitant, fast+wrong = misconception).
+  async function persistAttempt(q) {
+    if (!q || persistedRef.current.has(q.id)) return;
+    persistedRef.current.add(q.id);
+    const row = {
+      question_id: q.id,
+      is_correct: selected[q.id] === q.correct_answer,
+      selected_answer: selected[q.id] ?? null,
+      time_spent_seconds: answerTime(q.id), // capture before any await
+      confidence: null,
+    };
     const {
       data: { user },
     } = await supabase.auth.getUser();
-    if (user) {
-      await supabase.from("user_progress").insert({ user_id: user.id, question_id: q.id, is_correct: isCorrect });
-    }
+    if (user) await supabase.from("user_progress").insert({ user_id: user.id, ...row });
+  }
+
+  async function submitAnswer() {
+    const q = current;
+    if (q == null || selected[q.id] == null || submitted[q.id]) return;
+    setSubmitted((s) => ({ ...s, [q.id]: true }));
+    await persistAttempt(q); // both modes; tutor reveals immediately
+  }
+
+  // Safety net: if a submitted question is somehow left unwritten, persist it on
+  // navigation. persistedRef makes this a no-op once it's already been written.
+  function flushCurrent() {
+    if (reviewMode) return;
+    const q = current;
+    if (q && submitted[q.id] && !persistedRef.current.has(q.id)) persistAttempt(q);
   }
 
   // Flag/Mark — persists to question_marks so the "Marked" filter is real.
@@ -313,9 +346,9 @@ export default function Questions() {
   };
 
   /* ---------------- navigation ---------------- */
-  const goNext = () => idx < questions.length - 1 && setIdx(idx + 1);
-  const goPrev = () => idx > 0 && setIdx(idx - 1);
-  const jumpTo = (i) => i >= 0 && i < questions.length && setIdx(i);
+  const goNext = () => { if (idx < questions.length - 1) { flushCurrent(); setIdx(idx + 1); } };
+  const goPrev = () => { if (idx > 0) { flushCurrent(); setIdx(idx - 1); } };
+  const jumpTo = (i) => { if (i >= 0 && i < questions.length && i !== idx) { flushCurrent(); setIdx(i); } };
 
   // Record questions that were presented but left unanswered as omitted
   // (user_progress row with is_correct = null). One pass per block.
@@ -341,6 +374,7 @@ export default function Questions() {
 
   function finishBlock() {
     clearInterval(timerRef.current);
+    flushCurrent(); // persist a submitted-but-unrated current question
     recordOmitted();
     setReviewMode(false);
     setPhase("summary");

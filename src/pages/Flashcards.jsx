@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { supabase } from "../lib/supabase";
 import { font } from "../theme";
 import useIsMobile from "../lib/useIsMobile";
+import Skeleton from "../components/Skeleton";
 
 const DAY = 24 * 60 * 60 * 1000;
 const startOfDay = (d) => { const x = new Date(d); x.setHours(0,0,0,0); return x; };
@@ -59,6 +60,8 @@ export default function Flashcards() {
   const [dark, setDark] = useState(false);
   const [phase, setPhase] = useState("setup"); // setup | review | done
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
   const [userId, setUserId] = useState(null);
 
   const [systems, setSystems] = useState([]);
@@ -92,38 +95,55 @@ export default function Flashcards() {
 
   /* ---- initial load ---- */
   useEffect(() => {
+    let cancelled = false;
     (async () => {
-      const { data:{ user } } = await supabase.auth.getUser();
-      if (!user) { setLoading(false); return; }
-      setUserId(user.id);
-      const [{ data:sys }, { data:subs }, { data:lecs }, { data:cards }, { data:prog }] = await Promise.all([
-        supabase.from("systems").select("id,name,color").order("name"),
-        supabase.from("subjects").select("id,name,color,exam_date,system_id").order("name"),
-        supabase.from("lectures").select("id,title,lecture_date,order_index,subject_id").order("order_index"),
-        supabase.from("flashcards").select("id,subject_id,lecture_id"),
-        supabase.from("flashcard_progress").select("flashcard_id,next_review").eq("user_id", user.id),
-      ]);
-      const pm = {}; (prog||[]).forEach(p => pm[p.flashcard_id] = p);
-      const now = new Date();
-      const cnt = {};
-      (cards||[]).forEach(c => {
-        const due = !pm[c.id] || !pm[c.id].next_review || new Date(pm[c.id].next_review) <= now;
-        [c.subject_id, c.lecture_id].filter(Boolean).forEach(id => {
-          if (!cnt[id]) cnt[id] = { due:0, total:0 };
-          cnt[id].total++; if (due) cnt[id].due++;
+      setLoading(true);
+      setError(false);
+      try {
+        const { data:{ user } } = await supabase.auth.getUser();
+        if (!user) return; // finally clears loading
+        const results = await Promise.all([
+          supabase.from("systems").select("id,name,color").order("name"),
+          supabase.from("subjects").select("id,name,color,exam_date,system_id").order("name"),
+          supabase.from("lectures").select("id,title,lecture_date,order_index,subject_id").order("order_index"),
+          supabase.from("flashcards").select("id,subject_id,lecture_id"),
+          supabase.from("flashcard_progress").select("flashcard_id,next_review").eq("user_id", user.id),
+        ]);
+        const failed = results.find((r) => r.error);
+        if (failed) throw failed.error;
+        const [{ data:sys }, { data:subs }, { data:lecs }, { data:cards }, { data:prog }] = results;
+        const pm = {}; (prog||[]).forEach(p => pm[p.flashcard_id] = p);
+        const now = new Date();
+        const cnt = {};
+        (cards||[]).forEach(c => {
+          const due = !pm[c.id] || !pm[c.id].next_review || new Date(pm[c.id].next_review) <= now;
+          [c.subject_id, c.lecture_id].filter(Boolean).forEach(id => {
+            if (!cnt[id]) cnt[id] = { due:0, total:0 };
+            cnt[id].total++; if (due) cnt[id].due++;
+          });
         });
-      });
-      setSystems(sys||[]); setAllSubjects(subs||[]); setAllLectures(lecs||[]); setCounts(cnt);
-      // preselect first system that has subjects with cards, plus its first subject
-      const firstSys = (sys||[]).find(s => (subs||[]).some(su => su.system_id===s.id && (cnt[su.id]?.total||0)>0)) || (sys||[])[0];
-      if (firstSys) {
-        setSysId(firstSys.id);
-        const firstSub = (subs||[]).find(su => su.system_id === firstSys.id);
-        setSubId(firstSub ? firstSub.id : null);
+        if (cancelled) return;
+        setUserId(user.id);
+        setSystems(sys||[]); setAllSubjects(subs||[]); setAllLectures(lecs||[]); setCounts(cnt);
+        // preselect first system that has subjects with cards, plus its first subject
+        const firstSys = (sys||[]).find(s => (subs||[]).some(su => su.system_id===s.id && (cnt[su.id]?.total||0)>0)) || (sys||[])[0];
+        if (firstSys) {
+          setSysId(firstSys.id);
+          const firstSub = (subs||[]).find(su => su.system_id === firstSys.id);
+          setSubId(firstSub ? firstSub.id : null);
+        }
+      } catch {
+        if (!cancelled) setError(true);
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-      setLoading(false);
     })();
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [reloadKey]);
+
+  const retry = () => setReloadKey((k) => k + 1);
 
   /* derived lists */
   const subjects = allSubjects.filter(s => s.system_id === sysId);
@@ -220,25 +240,33 @@ export default function Flashcards() {
   async function start() {
     if (!canStart) return;
     setLoading(true);
-    if (multi) {
-      let query = supabase.from("flashcards").select("id,front,back");
-      if (subIds.length && lecIds.length) query = query.or(`subject_id.in.(${subIds.join(",")}),lecture_id.in.(${lecIds.join(",")})`);
-      else if (subIds.length) query = query.in("subject_id", subIds);
-      else query = query.in("lecture_id", lecIds);
-      const [{ data: cards }, { data: prog }] = await Promise.all([query, supabase.from("flashcard_progress").select("*").eq("user_id", userId)]);
-      const exam = allSubjects.filter((s) => subIds.includes(s.id) && s.exam_date).map((s) => s.exam_date).sort()[0] || null;
-      const parts = [];
-      if (subIds.length) parts.push(`${subIds.length} subject${subIds.length === 1 ? "" : "s"}`);
-      if (lecIds.length) parts.push(`${lecIds.length} lecture${lecIds.length === 1 ? "" : "s"}`);
-      buildAndStart(cards, prog, exam, `Multi-deck · ${parts.join(" · ")}`);
-    } else {
-      const q = lecId === "all"
-        ? supabase.from("flashcards").select("id,front,back").eq("subject_id", subId)
-        : supabase.from("flashcards").select("id,front,back").eq("lecture_id", lecId);
-      const [{ data: cards }, { data: prog }] = await Promise.all([q, supabase.from("flashcard_progress").select("*").eq("user_id", userId)]);
-      const subj = allSubjects.find((s) => s.id === subId);
-      const name = lecId === "all" ? subj?.name : allLectures.find((l) => l.id === lecId)?.title;
-      buildAndStart(cards, prog, subj?.exam_date, name || "Review");
+    setError(false);
+    try {
+      if (multi) {
+        let query = supabase.from("flashcards").select("id,front,back");
+        if (subIds.length && lecIds.length) query = query.or(`subject_id.in.(${subIds.join(",")}),lecture_id.in.(${lecIds.join(",")})`);
+        else if (subIds.length) query = query.in("subject_id", subIds);
+        else query = query.in("lecture_id", lecIds);
+        const [cardsRes, progRes] = await Promise.all([query, supabase.from("flashcard_progress").select("*").eq("user_id", userId)]);
+        if (cardsRes.error || progRes.error) throw cardsRes.error || progRes.error;
+        const exam = allSubjects.filter((s) => subIds.includes(s.id) && s.exam_date).map((s) => s.exam_date).sort()[0] || null;
+        const parts = [];
+        if (subIds.length) parts.push(`${subIds.length} subject${subIds.length === 1 ? "" : "s"}`);
+        if (lecIds.length) parts.push(`${lecIds.length} lecture${lecIds.length === 1 ? "" : "s"}`);
+        buildAndStart(cardsRes.data, progRes.data, exam, `Multi-deck · ${parts.join(" · ")}`);
+      } else {
+        const q = lecId === "all"
+          ? supabase.from("flashcards").select("id,front,back").eq("subject_id", subId)
+          : supabase.from("flashcards").select("id,front,back").eq("lecture_id", lecId);
+        const [cardsRes, progRes] = await Promise.all([q, supabase.from("flashcard_progress").select("*").eq("user_id", userId)]);
+        if (cardsRes.error || progRes.error) throw cardsRes.error || progRes.error;
+        const subj = allSubjects.find((s) => s.id === subId);
+        const name = lecId === "all" ? subj?.name : allLectures.find((l) => l.id === lecId)?.title;
+        buildAndStart(cardsRes.data, progRes.data, subj?.exam_date, name || "Review");
+      }
+    } catch {
+      setError(true);
+      setLoading(false);
     }
   }
 
@@ -319,13 +347,38 @@ export default function Flashcards() {
 
       <div style={{ maxWidth:760, margin:"0 auto", padding:"22px 16px" }}>
         {loading && (
-          <div style={{ display:"flex", justifyContent:"center", paddingTop:60 }}>
-            <div style={{ width:32, height:32, border:`3px solid ${t.border}`, borderTopColor:accent, borderRadius:"50%", animation:"spin .8s linear infinite" }} />
+          <div style={{ paddingTop: 8 }}>
+            <Skeleton width={180} height={26} radius={8} color={t.border} style={{ marginBottom: 22 }} />
+            {[0, 1, 2].map((sec) => (
+              <div key={sec} style={{ marginBottom: 24 }}>
+                <Skeleton width={120} height={16} color={t.border} style={{ marginBottom: 14 }} />
+                <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(2,1fr)", gap: 14 }}>
+                  {[0, 1, 2, 3].map((i) => (
+                    <Skeleton key={i} height={48} radius={10} color={t.border} />
+                  ))}
+                </div>
+              </div>
+            ))}
+            <Skeleton height={50} radius={10} color={t.border} style={{ marginTop: 8 }} />
+          </div>
+        )}
+
+        {!loading && error && (
+          <div style={{ textAlign: "center", padding: "48px 16px" }}>
+            <div style={{ color: t.muted, fontSize: 14, lineHeight: 1.6, marginBottom: 16 }}>
+              Couldn&apos;t load this page. Check your connection and try again.
+            </div>
+            <button
+              onClick={retry}
+              style={{ background: accent, color: "#fff", border: "none", borderRadius: 10, padding: "11px 26px", fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: font }}
+            >
+              Retry
+            </button>
           </div>
         )}
 
         {/* ---------- SETUP ---------- */}
-        {!loading && phase==="setup" && (
+        {!loading && !error && phase==="setup" && (
           <div>
             {/* header + mode toggle */}
             <div style={{ display:"flex", alignItems:"center", marginBottom:4 }}>

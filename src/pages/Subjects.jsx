@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { colors, font } from "../theme";
 import useIsMobile from "../lib/useIsMobile";
+import Skeleton, { ErrorState } from "../components/Skeleton";
 
 /* ------------------------------------------------------------------ */
 /*  Library — 3-column browser: System → Subject → Topic (lecture)    */
@@ -13,6 +14,8 @@ export default function Subjects() {
   const navigate = useNavigate();
   const isMobile = useIsMobile();
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
 
   const [systems, setSystems] = useState([]);
   const [subjects, setSubjects] = useState([]);
@@ -27,10 +30,13 @@ export default function Subjects() {
   const [selSub, setSelSub] = useState(null);
 
   useEffect(() => {
+    let cancelled = false;
     (async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      const [{ data: sys }, { data: subs }, { data: lecs }, { data: qs }, { data: fcs }, prog, fprog] =
-        await Promise.all([
+      setLoading(true);
+      setError(false);
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        const results = await Promise.all([
           supabase.from("systems").select("id,name,color").order("name"),
           supabase.from("subjects").select("id,name,color,system_id").order("name"),
           supabase.from("lectures").select("id,title,subject_id,order_index").order("order_index"),
@@ -39,46 +45,96 @@ export default function Subjects() {
           user ? supabase.from("user_progress").select("question_id").eq("user_id", user.id) : Promise.resolve({ data: [] }),
           user ? supabase.from("flashcard_progress").select("flashcard_id").eq("user_id", user.id) : Promise.resolve({ data: [] }),
         ]);
+        const failed = results.find((r) => r.error);
+        if (failed) throw failed.error;
+        const [{ data: sys }, { data: subs }, { data: lecs }, { data: qs }, { data: fcs }, prog, fprog] = results;
 
-      const answeredQ = new Set((prog.data || []).map((p) => p.question_id));
-      const reviewedF = new Set((fprog.data || []).map((p) => p.flashcard_id));
+        const answeredQ = new Set((prog.data || []).map((p) => p.question_id));
+        const reviewedF = new Set((fprog.data || []).map((p) => p.flashcard_id));
 
-      // per-lecture counts
-      const lm = {};
-      const ensure = (id) => { if (id && !lm[id]) lm[id] = { q: 0, qDone: 0, f: 0, fDone: 0 }; };
-      (qs || []).forEach((q) => { ensure(q.lecture_id); if (q.lecture_id) { lm[q.lecture_id].q++; if (answeredQ.has(q.id)) lm[q.lecture_id].qDone++; } });
-      (fcs || []).forEach((f) => { ensure(f.lecture_id); if (f.lecture_id) { lm[f.lecture_id].f++; if (reviewedF.has(f.id)) lm[f.lecture_id].fDone++; } });
+        // per-lecture counts
+        const lm = {};
+        const ensure = (id) => { if (id && !lm[id]) lm[id] = { q: 0, qDone: 0, f: 0, fDone: 0 }; };
+        (qs || []).forEach((q) => { ensure(q.lecture_id); if (q.lecture_id) { lm[q.lecture_id].q++; if (answeredQ.has(q.id)) lm[q.lecture_id].qDone++; } });
+        (fcs || []).forEach((f) => { ensure(f.lecture_id); if (f.lecture_id) { lm[f.lecture_id].f++; if (reviewedF.has(f.id)) lm[f.lecture_id].fDone++; } });
 
-      // per-subject topic (lecture) count
-      const sm = {};
-      (subs || []).forEach((s) => (sm[s.id] = { topics: 0 }));
-      (lecs || []).forEach((l) => { if (sm[l.subject_id]) sm[l.subject_id].topics++; });
+        // per-subject topic (lecture) count
+        const sm = {};
+        (subs || []).forEach((s) => (sm[s.id] = { topics: 0 }));
+        (lecs || []).forEach((l) => { if (sm[l.subject_id]) sm[l.subject_id].topics++; });
 
-      // per-system subject + topic counts
-      const sysm = {};
-      (sys || []).forEach((s) => (sysm[s.id] = { subjects: 0, topics: 0 }));
-      (subs || []).forEach((s) => {
-        if (sysm[s.system_id]) {
-          sysm[s.system_id].subjects++;
-          sysm[s.system_id].topics += sm[s.id]?.topics || 0;
-        }
-      });
+        // per-system subject + topic counts
+        const sysm = {};
+        (sys || []).forEach((s) => (sysm[s.id] = { subjects: 0, topics: 0 }));
+        (subs || []).forEach((s) => {
+          if (sysm[s.system_id]) {
+            sysm[s.system_id].subjects++;
+            sysm[s.system_id].topics += sm[s.id]?.topics || 0;
+          }
+        });
 
-      setSystems(sys || []);
-      setSubjects(subs || []);
-      setLectures(lecs || []);
-      setLecMeta(lm);
-      setSubMeta(sm);
-      setSysMeta(sysm);
-      setLoading(false);
+        if (cancelled) return;
+        setSystems(sys || []);
+        setSubjects(subs || []);
+        setLectures(lecs || []);
+        setLecMeta(lm);
+        setSubMeta(sm);
+        setSysMeta(sysm);
+      } catch {
+        if (!cancelled) setError(true);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
     })();
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [reloadKey]);
+
+  const retry = () => setReloadKey((k) => k + 1);
 
   const visibleSubjects = subjects.filter((s) => s.system_id === selSys?.id);
   const visibleLectures = lectures.filter((l) => l.subject_id === selSub?.id);
 
+  if (error) {
+    return (
+      <div style={{ fontFamily: font, color: colors.text }}>
+        <h1 style={{ fontSize: 24, margin: "0 0 4px" }}>Library</h1>
+        <p style={{ color: colors.textSoft, margin: "0 0 20px", fontSize: 14 }}>
+          Browse questions and active recall by system, subject, and topic.
+        </p>
+        <ErrorState onRetry={retry} />
+      </div>
+    );
+  }
+
   if (loading) {
-    return <div style={{ display: "flex", justifyContent: "center", paddingTop: 80 }}><div style={spinner} /></div>;
+    const colSkeleton = (
+      <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 10 }}>
+        {[0, 1, 2, 3, 4].map((i) => (
+          <Skeleton key={i} height={44} radius={8} />
+        ))}
+      </div>
+    );
+    return (
+      <div style={{ fontFamily: font, color: colors.text }}>
+        <h1 style={{ fontSize: 24, margin: "0 0 4px" }}>Library</h1>
+        <p style={{ color: colors.textSoft, margin: "0 0 20px", fontSize: 14 }}>
+          Browse questions and active recall by system, subject, and topic.
+        </p>
+        <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr 1.3fr", gap: 0, border: `1px solid ${colors.line}`, borderRadius: 14, overflow: "hidden", minHeight: isMobile ? 320 : 460, background: colors.card }}>
+          {isMobile ? (
+            colSkeleton
+          ) : (
+            <>
+              <div style={{ borderRight: `1px solid ${colors.line}` }}>{colSkeleton}</div>
+              <div style={{ borderRight: `1px solid ${colors.line}` }}>{colSkeleton}</div>
+              <div>{colSkeleton}</div>
+            </>
+          )}
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -277,4 +333,3 @@ const progRow = {
 };
 const placeholder = { padding: "60px 20px", textAlign: "center", color: colors.textSoft, fontSize: 14 };
 const emptyMsg = { padding: "24px 16px", color: colors.textSoft, fontSize: 13 };
-const spinner = { width: 32, height: 32, border: `3px solid ${colors.line}`, borderTopColor: colors.blue, borderRadius: "50%", animation: "spin 0.8s linear infinite" };

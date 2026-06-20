@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { colors, gradients, font } from "../theme";
+import Skeleton, { ErrorState } from "./Skeleton";
 
 /* ------------------------------------------------------------------ */
 /*  Shared dashboard — used by Home (self) and Admin (admin)          */
@@ -57,6 +58,8 @@ function fmtDate(d) {
 export default function StudentAnalytics({ userId = null, mode = "self" }) {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
   const [profile, setProfile] = useState(null);
   const [rows, setRows] = useState([]); // user_progress joined to questions->subjects
   const [cardsReviewed, setCardsReviewed] = useState(0);
@@ -65,49 +68,87 @@ export default function StudentAnalytics({ userId = null, mode = "self" }) {
     let active = true;
     (async () => {
       setLoading(true);
+      setError(false);
+      try {
+        // resolve the user id
+        let uid = userId;
+        if (mode === "self") {
+          const {
+            data: { user },
+          } = await supabase.auth.getUser();
+          uid = user?.id || null;
+        }
+        if (!uid) return; // finally clears loading
 
-      // resolve the user id
-      let uid = userId;
-      if (mode === "self") {
-        const {
-          data: { user },
-        } = await supabase.auth.getUser();
-        uid = user?.id || null;
-      }
-      if (!uid) {
+        // fresh queries on every mount — never cached
+        const [profRes, progRes, cardRes] = await Promise.all([
+          supabase.from("profiles").select("full_name,email").eq("id", uid).maybeSingle(),
+          supabase
+            .from("user_progress")
+            .select("is_correct,answered_at,questions(topic,subjects(name,color))")
+            .eq("user_id", uid)
+            .order("answered_at", { ascending: false }),
+          supabase
+            .from("flashcard_progress")
+            .select("id", { count: "exact", head: true })
+            .eq("user_id", uid),
+        ]);
+        // Progress + card count are essential; the profile lookup is soft.
+        if (progRes.error || cardRes.error) throw progRes.error || cardRes.error;
+
+        if (!active) return;
+        setProfile(profRes.data || null);
+        setRows(progRes.data || []);
+        setCardsReviewed(cardRes.count || 0);
+      } catch {
+        if (active) setError(true);
+      } finally {
         if (active) setLoading(false);
-        return;
       }
-
-      // fresh queries on every mount — never cached
-      const [{ data: prof }, { data: prog }, { count: cards }] = await Promise.all([
-        supabase.from("profiles").select("full_name,email").eq("id", uid).maybeSingle(),
-        supabase
-          .from("user_progress")
-          .select("is_correct,answered_at,questions(topic,subjects(name,color))")
-          .eq("user_id", uid)
-          .order("answered_at", { ascending: false }),
-        supabase
-          .from("flashcard_progress")
-          .select("id", { count: "exact", head: true })
-          .eq("user_id", uid),
-      ]);
-
-      if (!active) return;
-      setProfile(prof || null);
-      setRows(prog || []);
-      setCardsReviewed(cards || 0);
-      setLoading(false);
     })();
     return () => {
       active = false;
     };
-  }, [userId, mode]);
+  }, [userId, mode, reloadKey]);
+
+  const retry = () => setReloadKey((k) => k + 1);
+
+  if (error) {
+    return (
+      <div style={page}>
+        <ErrorState onRetry={retry} />
+      </div>
+    );
+  }
 
   if (loading) {
     return (
-      <div style={{ ...page, display: "flex", justifyContent: "center", alignItems: "center", minHeight: "60vh" }}>
-        <div style={spinner} />
+      <div style={page}>
+        <div style={heroWrap}>
+          <Skeleton height={150} radius={20} />
+          <div style={statsRow}>
+            {[0, 1, 2, 3].map((i) => (
+              <Skeleton key={i} height={84} radius={14} />
+            ))}
+          </div>
+        </div>
+        <div style={twoCol}>
+          <div style={cardStyle}>
+            <Skeleton width={170} height={14} style={{ marginBottom: 18 }} />
+            {[0, 1, 2].map((i) => (
+              <div key={i} style={{ marginBottom: 16 }}>
+                <Skeleton width="55%" height={12} style={{ marginBottom: 8 }} />
+                <Skeleton height={8} radius={99} />
+              </div>
+            ))}
+          </div>
+          <div style={cardStyle}>
+            <Skeleton width={140} height={14} style={{ marginBottom: 18 }} />
+            {[0, 1, 2, 3].map((i) => (
+              <Skeleton key={i} height={30} style={{ marginBottom: 12 }} />
+            ))}
+          </div>
+        </div>
       </div>
     );
   }
@@ -522,12 +563,4 @@ const actionOutline = {
   display: "flex",
   alignItems: "center",
   justifyContent: "space-between",
-};
-const spinner = {
-  width: 36,
-  height: 36,
-  border: `3px solid ${colors.line}`,
-  borderTopColor: colors.blue,
-  borderRadius: "50%",
-  animation: "spin 0.8s linear infinite",
 };
