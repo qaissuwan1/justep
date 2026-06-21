@@ -29,6 +29,9 @@ export default function Subjects() {
   const [selSys, setSelSys] = useState(null);
   const [selSub, setSelSub] = useState(null);
 
+  const [userId, setUserId] = useState(null);
+  const [lecProgress, setLecProgress] = useState({}); // lecture_id -> { status, started_at, completed_at }
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -44,10 +47,11 @@ export default function Subjects() {
           supabase.from("flashcards").select("id,subject_id,lecture_id"),
           user ? supabase.from("user_progress").select("question_id").eq("user_id", user.id) : Promise.resolve({ data: [] }),
           user ? supabase.from("flashcard_progress").select("flashcard_id").eq("user_id", user.id) : Promise.resolve({ data: [] }),
+          user ? supabase.from("lecture_progress").select("lecture_id,status,started_at,completed_at").eq("user_id", user.id) : Promise.resolve({ data: [] }),
         ]);
         const failed = results.find((r) => r.error);
         if (failed) throw failed.error;
-        const [{ data: sys }, { data: subs }, { data: lecs }, { data: qs }, { data: fcs }, prog, fprog] = results;
+        const [{ data: sys }, { data: subs }, { data: lecs }, { data: qs }, { data: fcs }, prog, fprog, lprog] = results;
 
         const answeredQ = new Set((prog.data || []).map((p) => p.question_id));
         const reviewedF = new Set((fprog.data || []).map((p) => p.flashcard_id));
@@ -73,13 +77,19 @@ export default function Subjects() {
           }
         });
 
+        // per-user lecture progress
+        const lp = {};
+        (lprog.data || []).forEach((r) => { lp[r.lecture_id] = r; });
+
         if (cancelled) return;
+        setUserId(user?.id || null);
         setSystems(sys || []);
         setSubjects(subs || []);
         setLectures(lecs || []);
         setLecMeta(lm);
         setSubMeta(sm);
         setSysMeta(sysm);
+        setLecProgress(lp);
       } catch {
         if (!cancelled) setError(true);
       } finally {
@@ -92,6 +102,35 @@ export default function Subjects() {
   }, [reloadKey]);
 
   const retry = () => setReloadKey((k) => k + 1);
+
+  // Record a lecture "open" (engagement). Fire-and-forget; never downgrades a
+  // completed lecture back to in_progress; sets started_at only the first time.
+  async function openLecture(id) {
+    if (!userId) return;
+    const now = new Date().toISOString();
+    const existing = lecProgress[id];
+    const status = existing?.status === "completed" ? "completed" : "in_progress";
+    const startedAt = existing?.started_at ?? now;
+    setLecProgress((p) => ({ ...p, [id]: { ...(p[id] || {}), status, started_at: startedAt } }));
+    const { error } = await supabase
+      .from("lecture_progress")
+      .upsert({ user_id: userId, lecture_id: id, last_opened_at: now, started_at: startedAt, status }, { onConflict: "user_id,lecture_id" });
+    if (error) console.error("lecture_progress open upsert failed:", error);
+  }
+
+  // Open the lecture's content + record the open without blocking navigation.
+  const openAndGo = (id, path) => { openLecture(id); navigate(path); };
+
+  async function markComplete(id) {
+    if (!userId) return;
+    const now = new Date().toISOString();
+    const startedAt = lecProgress[id]?.started_at ?? now;
+    setLecProgress((p) => ({ ...p, [id]: { ...(p[id] || {}), status: "completed", started_at: startedAt, completed_at: now } }));
+    const { error } = await supabase
+      .from("lecture_progress")
+      .upsert({ user_id: userId, lecture_id: id, completed_at: now, last_opened_at: now, started_at: startedAt, status: "completed" }, { onConflict: "user_id,lecture_id" });
+    if (error) console.error("lecture_progress complete upsert failed:", error);
+  }
 
   const visibleSubjects = subjects.filter((s) => s.system_id === selSys?.id);
   const visibleLectures = lectures.filter((l) => l.subject_id === selSub?.id);
@@ -202,17 +241,16 @@ export default function Subjects() {
                 <div style={emptyMsg}>No topics in this subject yet.</div>
               ) : (
                 <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 12 }}>
-                  {visibleLectures.map((l) => {
-                    const m = lecMeta[l.id] || { q: 0, qDone: 0, f: 0, fDone: 0 };
-                    return (
-                      <div key={l.id} style={topicCard}>
-                        <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 10 }}>{l.title}</div>
-                        {m.f > 0 && <ProgressRow icon="🧠" label="Active Recall" done={m.fDone} total={m.f} onClick={() => navigate("/app/flashcards")} />}
-                        {m.q > 0 && <ProgressRow icon="📝" label="Questions" done={m.qDone} total={m.q} onClick={() => navigate("/app/questions")} />}
-                        {m.f === 0 && m.q === 0 && <div style={{ fontSize: 12, color: colors.textSoft }}>No content yet.</div>}
-                      </div>
-                    );
-                  })}
+                  {visibleLectures.map((l) => (
+                    <LectureCard
+                      key={l.id}
+                      l={l}
+                      m={lecMeta[l.id] || { q: 0, qDone: 0, f: 0, fDone: 0 }}
+                      prog={lecProgress[l.id]}
+                      onOpenNav={openAndGo}
+                      onComplete={markComplete}
+                    />
+                  ))}
                 </div>
               )}
             </>
@@ -273,31 +311,57 @@ export default function Subjects() {
             <div style={emptyMsg}>No topics in this subject yet.</div>
           ) : (
             <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 12 }}>
-              {visibleLectures.map((l) => {
-                const m = lecMeta[l.id] || { q: 0, qDone: 0, f: 0, fDone: 0 };
-                return (
-                  <div key={l.id} style={topicCard}>
-                    <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 10 }}>{l.title}</div>
-                    {m.f > 0 && (
-                      <ProgressRow icon="🧠" label="Active Recall" done={m.fDone} total={m.f}
-                        onClick={() => navigate("/app/flashcards")} />
-                    )}
-                    {m.q > 0 && (
-                      <ProgressRow icon="📝" label="Questions" done={m.qDone} total={m.q}
-                        onClick={() => navigate("/app/questions")} />
-                    )}
-                    {m.f === 0 && m.q === 0 && (
-                      <div style={{ fontSize: 12, color: colors.textSoft }}>No content yet.</div>
-                    )}
-                  </div>
-                );
-              })}
+              {visibleLectures.map((l) => (
+                <LectureCard
+                  key={l.id}
+                  l={l}
+                  m={lecMeta[l.id] || { q: 0, qDone: 0, f: 0, fDone: 0 }}
+                  prog={lecProgress[l.id]}
+                  onOpenNav={openAndGo}
+                  onComplete={markComplete}
+                />
+              ))}
             </div>
           )}
         </div>
       </div>
       )}
     </div>
+  );
+}
+
+function LectureCard({ l, m, prog, onOpenNav, onComplete }) {
+  const status = prog?.status || "not_started";
+  const open = (path) => onOpenNav(l.id, path);
+  return (
+    <div style={topicCard}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+        <div style={{ fontWeight: 600, fontSize: 14, flex: 1, minWidth: 0 }}>{l.title}</div>
+        <StatusPill status={status} />
+      </div>
+      {m.f > 0 && <ProgressRow icon="🧠" label="Active Recall" done={m.fDone} total={m.f} onClick={() => open("/app/flashcards")} />}
+      {m.q > 0 && <ProgressRow icon="📝" label="Questions" done={m.qDone} total={m.q} onClick={() => open("/app/questions")} />}
+      {m.f === 0 && m.q === 0 && <div style={{ fontSize: 12, color: colors.textSoft }}>No content yet.</div>}
+      {status !== "completed" && (
+        <div style={{ marginTop: 10, display: "flex", justifyContent: "flex-end" }}>
+          <button onClick={() => onComplete(l.id)} style={completeBtn}>Mark as Complete</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StatusPill({ status }) {
+  const map = {
+    not_started: { label: "Not started", color: colors.textMuted, bg: colors.line },
+    in_progress: { label: "In progress", color: colors.amber, bg: "#FFFBEB" },
+    completed: { label: "✓ Completed", color: colors.green, bg: "#ECFDF5" },
+  };
+  const s = map[status] || map.not_started;
+  return (
+    <span style={{ fontSize: 11, fontWeight: 600, color: s.color, background: s.bg, borderRadius: 999, padding: "3px 9px", whiteSpace: "nowrap", flexShrink: 0 }}>
+      {s.label}
+    </span>
   );
 }
 
@@ -322,6 +386,7 @@ const rowItem = (active) => ({
   background: active ? "#FEF3C7" : "transparent", cursor: "pointer", fontFamily: font, color: colors.text,
 });
 const topicCard = { border: `1px solid ${colors.line}`, borderRadius: 12, padding: 14 };
+const completeBtn = { fontSize: 12, fontWeight: 600, color: colors.blue, background: "#fff", border: `1px solid ${colors.line}`, borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontFamily: font };
 const backRow = {
   display: "flex", alignItems: "center", gap: 6, width: "100%",
   padding: "11px 16px", border: "none", borderBottom: `1px solid ${colors.line}`,

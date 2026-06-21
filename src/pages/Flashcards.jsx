@@ -274,11 +274,27 @@ export default function Flashcards() {
   async function rate(rating) {
     const item = queue[idx]; if (!item) return;
     const sched = schedule(item.progress, rating, examDate);
+
+    // Current SR state — one row per card, upserted. (single + multi deck)
     await supabase.from("flashcard_progress").upsert({
       user_id:userId, flashcard_id:item.card.id, status:sched.status,
       next_review:sched.next_review, last_reviewed:new Date().toISOString(),
       ease_factor:sched.ease_factor, interval_days:sched.interval_days, repetitions:sched.repetitions,
     }, { onConflict:"user_id,flashcard_id" });
+
+    // Append-only review history (Layer 1). Fire-and-forget: a failure here must
+    // not block the review flow — just log and continue.
+    supabase.from("flashcard_reviews").insert({
+      user_id: userId,
+      flashcard_id: item.card.id,
+      rating,
+      interval_days: sched.interval_days,
+      ease_factor: sched.ease_factor,
+      next_review: sched.next_review,
+    }).then(({ error }) => {
+      if (error) console.error("flashcard_reviews insert failed:", error);
+    });
+
     setStats(s => ({ ...s, [rating]: s[rating]+1 }));
     if (rating === "again") setQueue(q => [...q, { ...item, progress:{ ...item.progress, ...sched } }]);
     if (idx < queue.length-1) { setIdx(i=>i+1); setRevealed(false); }
