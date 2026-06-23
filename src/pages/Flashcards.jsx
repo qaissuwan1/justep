@@ -8,40 +8,68 @@ const DAY = 24 * 60 * 60 * 1000;
 const startOfDay = (d) => { const x = new Date(d); x.setHours(0,0,0,0); return x; };
 const addDays = (d, n) => new Date(startOfDay(d).getTime() + n * DAY);
 
+const MAX_INTERVAL = 21; // course window ceiling (3 weeks)
+
+// SM-2 variant tuned for JUStep's short 3-4 week system windows.
+//   Early (reps 0-2): rating-driven fixed steps — Again 1, Hard 1, Good 3, Easy 4.
+//   Mature (reps >= 3): geometric — Hard I*(EF-0.15 floored 1.2), Good I*EF, Easy I*(EF+0.15).
+//   Easy always lands at least 1 day past Good. Capped at 21 days (and the exam).
 function schedule(progress, rating, examDate) {
-  let { repetitions = 0, interval_days = 0, ease_factor = 2.5 } = progress || {};
+  // null-safe: coerce legacy/blank values to defaults (never NaN).
+  let repetitions = Number(progress?.repetitions) || 0;
+  let ease_factor = Number(progress?.ease_factor) || 2.5;
+  const I = Number(progress?.interval_days) || 0;
+  const EF0 = ease_factor; // incoming ease factor, used in the interval factors
+
+  let interval;
   if (rating === "again") {
-    repetitions = 0; interval_days = 1; ease_factor = Math.max(1.3, ease_factor - 0.2);
+    repetitions = 0;
+    ease_factor = Math.max(1.3, EF0 - 0.2);
+    interval = 1;
   } else {
-    if (repetitions === 0)      interval_days = 1;
-    else if (repetitions === 1) interval_days = 3;
-    else if (repetitions === 2) interval_days = 7;
-    else {
-      if (rating === "hard") interval_days = Math.max(2, Math.round(interval_days * 0.8 + 2));
-      else if (rating === "good") interval_days = Math.max(4, Math.round(interval_days * 1.0 + 4));
-      else if (rating === "easy") interval_days = Math.max(7, Math.round(interval_days * ease_factor));
+    // ease factor update (direction only; bounds [1.3, 3.0])
+    if (rating === "hard") ease_factor = Math.max(1.3, EF0 - 0.15);
+    else if (rating === "easy") ease_factor = Math.min(3.0, EF0 + 0.15);
+    // good: unchanged
+
+    // Interval a given rating would produce from the current (incoming) state.
+    const intervalFor = (r) => {
+      if (repetitions < 3) return r === "hard" ? 1 : r === "good" ? 3 : 4; // early
+      if (r === "hard") return Math.round(I * Math.max(1.2, EF0 - 0.15));
+      if (r === "good") return Math.round(I * EF0);
+      return Math.round(I * (EF0 + 0.15)); // easy
+    };
+
+    interval = intervalFor(rating);
+    // Easy must always exceed Good, or the button is meaningless.
+    if (rating === "easy") {
+      const good = intervalFor("good");
+      if (interval <= good) interval = good + 1;
     }
-    if (rating === "easy") ease_factor = Math.min(3.0, ease_factor + 0.15);
-    if (rating === "hard") ease_factor = Math.max(1.3, ease_factor - 0.15);
     repetitions += 1;
   }
-  let next = addDays(new Date(), interval_days);
+
+  // Caps: 21-day ceiling, then squeeze into the remaining exam window, floor 1.
+  interval = Math.min(interval, MAX_INTERVAL);
   if (examDate) {
-    const exam = startOfDay(examDate);
-    if (next > exam) {
-      const tomorrow = addDays(new Date(), 1);
-      next = exam > startOfDay(new Date()) ? (tomorrow < exam ? tomorrow : exam) : startOfDay(new Date());
-    }
+    const daysUntilExam = Math.round((startOfDay(examDate).getTime() - startOfDay(new Date()).getTime()) / DAY);
+    if (daysUntilExam >= 1) interval = Math.min(interval, daysUntilExam);
   }
-  return { repetitions, interval_days, ease_factor, next_review: next.toISOString(), status: rating === "again" || repetitions < 3 ? "learning" : "known" };
+  interval = Math.max(1, interval);
+
+  return {
+    repetitions,
+    interval_days: interval,
+    ease_factor,
+    next_review: addDays(new Date(), interval).toISOString(),
+    status: rating === "again" || repetitions < 3 ? "learning" : "known",
+  };
 }
 
 function intervalLabel(rating, progress, examDate) {
-  const d = schedule(progress, rating, examDate).interval_days;
-  if (d <= 1) return "1d";
-  if (d < 7)  return `${d}d`;
-  if (d < 30) return `${Math.round(d/7)}w`;
-  return `${Math.round(d/30)}mo`;
+  // Intervals are capped at 21 days, so show plain days — keeps each rating's
+  // preview distinct (weeks-rounding would collapse 19/20/21 into "3w").
+  return `${schedule(progress, rating, examDate).interval_days}d`;
 }
 
 /* light + dark tokens */
@@ -223,12 +251,11 @@ export default function Flashcards() {
     const due = (cards || [])
       .map((c) => ({ card: c, progress: pm[c.id] || null }))
       .filter(({ progress }) => !progress || !progress.next_review || new Date(progress.next_review) <= now)
-      .sort((a, b) => {
-        const ea = a.progress?.exam_boost ? 1 : 0, eb = b.progress?.exam_boost ? 1 : 0;
-        if (ea !== eb) return eb - ea;
-        return (a.progress?.next_review ? new Date(a.progress.next_review).getTime() : 0)
-             - (b.progress?.next_review ? new Date(b.progress.next_review).getTime() : 0);
-      });
+      // Oldest-due first.
+      .sort((a, b) =>
+        (a.progress?.next_review ? new Date(a.progress.next_review).getTime() : 0)
+        - (b.progress?.next_review ? new Date(b.progress.next_review).getTime() : 0)
+      );
     setExamDate(exam || null);
     setSessionName(name);
     setQueue(due); setIdx(0); setRevealed(false);
@@ -468,9 +495,6 @@ export default function Flashcards() {
         {!loading && phase==="review" && queue[idx] && (
           <div>
             <div style={{ background:t.card, borderRadius:16, padding:revealed?"30px 28px":"36px 28px", minHeight:260, position:"relative", display:"flex", flexDirection:"column" }}>
-              {queue[idx].progress?.exam_boost && (
-                <span style={{ position:"absolute", top:14, right:14, background:dark?"#78350F":"#FEF3C7", color:dark?"#FDE68A":"#92400E", fontSize:11, fontWeight:700, padding:"3px 10px", borderRadius:99 }}>⚠️ Exam Boost</span>
-              )}
               <div style={{ fontSize:11, color:t.muted, textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:12 }}>Question</div>
               <div style={{ fontSize:revealed?17:19, lineHeight:1.6, color:t.text, whiteSpace:"pre-wrap", flex:revealed?"none":1 }}>{queue[idx].card.front}</div>
 
