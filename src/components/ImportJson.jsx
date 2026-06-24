@@ -1,6 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { supabase } from "../lib/supabase";
 import { useLectures } from "../lib/useLectures";
+import { useTopics } from "../lib/useTopics";
 import { colors, gradients, font } from "../theme";
 
 /* ------------------------------------------------------------------ */
@@ -15,6 +16,20 @@ export default function ImportJson() {
   const [subjectId, setSubjectId] = useState("");
   const [lectureId, setLectureId] = useState("");
   const lectures = useLectures(subjectId);
+  const hookTopics = useTopics(subjectId);
+  // Topics created inline this session: the useTopics hook only refetches when
+  // subjectId changes, so we merge freshly-created ones in until then.
+  const [localTopics, setLocalTopics] = useState([]);
+  const [topicId, setTopicId] = useState("");
+  const [newTopicName, setNewTopicName] = useState("");
+  const [creatingTopic, setCreatingTopic] = useState(false);
+  const [topicError, setTopicError] = useState("");
+  const topics = useMemo(() => {
+    const ids = new Set(hookTopics.map((t) => t.id));
+    return [...hookTopics, ...localTopics.filter((t) => !ids.has(t.id))].sort(
+      (a, b) => (a.order_index ?? 0) - (b.order_index ?? 0) || a.name.localeCompare(b.name)
+    );
+  }, [hookTopics, localTopics]);
   const [raw, setRaw] = useState("");
   const [parsed, setParsed] = useState(null); // { questions:[], flashcards:[] }
   const [errors, setErrors] = useState([]);
@@ -28,6 +43,32 @@ export default function ImportJson() {
       setSubjects(data || []);
     })();
   }, []);
+
+  /* ---------------- create topic inline ---------------- */
+  async function handleCreateTopic() {
+    const name = newTopicName.trim();
+    if (!subjectId || !name) return;
+    setTopicError("");
+    setCreatingTopic(true);
+    const nextOrder = topics.reduce((m, t) => Math.max(m, t.order_index ?? 0), -1) + 1;
+    const { data, error } = await supabase
+      .from("topics")
+      .insert({ name, subject_id: subjectId, order_index: nextOrder })
+      .select("id, name, order_index")
+      .single();
+    setCreatingTopic(false);
+    if (error) {
+      setTopicError(
+        error.code === "23505"
+          ? "A topic with that name already exists in this subject."
+          : "Could not create topic: " + error.message
+      );
+      return;
+    }
+    setLocalTopics((prev) => [...prev, data]);
+    setTopicId(data.id);
+    setNewTopicName("");
+  }
 
   /* ---------------- parse + validate ---------------- */
   function handleValidate() {
@@ -154,6 +195,7 @@ export default function ImportJson() {
             toInsert.push({
               subject_id: subjectId,
               lecture_id: lectureId || null,
+              topic_id: topicId || null,
               topic: q.topic,
               difficulty: q.difficulty,
               stem: q.stem,
@@ -179,6 +221,7 @@ export default function ImportJson() {
         const fRows = parsed.flashcards.map((f) => ({
           subject_id: subjectId,
           lecture_id: lectureId || null,
+          topic_id: topicId || null,
           front: f.front,
           back: f.back,
         }));
@@ -217,6 +260,10 @@ export default function ImportJson() {
           onChange={(e) => {
             setSubjectId(e.target.value);
             setLectureId("");
+            setTopicId("");
+            setLocalTopics([]);
+            setNewTopicName("");
+            setTopicError("");
           }}
           style={select}
         >
@@ -227,6 +274,39 @@ export default function ImportJson() {
             </option>
           ))}
         </select>
+
+        <label style={{ ...label, marginTop: 16 }}>Topic (optional)</label>
+        <select value={topicId} onChange={(e) => setTopicId(e.target.value)} style={select} disabled={!subjectId}>
+          <option value="">— No topic —</option>
+          {topics.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.name}
+            </option>
+          ))}
+        </select>
+        <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+          <input
+            value={newTopicName}
+            onChange={(e) => setNewTopicName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                handleCreateTopic();
+              }
+            }}
+            placeholder="New topic name"
+            style={{ ...select, flex: 1 }}
+            disabled={!subjectId}
+          />
+          <button
+            onClick={handleCreateTopic}
+            style={{ ...ghostBtn, whiteSpace: "nowrap", opacity: !subjectId || !newTopicName.trim() || creatingTopic ? 0.55 : 1 }}
+            disabled={!subjectId || !newTopicName.trim() || creatingTopic}
+          >
+            {creatingTopic ? "Creating…" : "Create Topic"}
+          </button>
+        </div>
+        {topicError && <div style={{ color: colors.red, fontSize: 13, marginTop: 8 }}>{topicError}</div>}
 
         <label style={{ ...label, marginTop: 16 }}>Lecture (optional)</label>
         <select value={lectureId} onChange={(e) => setLectureId(e.target.value)} style={select} disabled={!subjectId}>

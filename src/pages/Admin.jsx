@@ -7,6 +7,7 @@ import LecturePipeline from "../components/LecturePipeline";
 import ImportJson from "../components/ImportJson";
 import { computeStreak, dayKey } from "../lib/progress";
 import { useLectures } from "../lib/useLectures";
+import { useTopics } from "../lib/useTopics";
 
 // Bootstrap allowlist so the panel is reachable before any profile has role='admin'.
 // Primary gate is profiles.role === 'admin' (see migration 003).
@@ -264,14 +265,24 @@ function UploadLecture() {
 // ════════════════════════════════════════════════════════════════════════════
 // Question add/edit form (modal)
 // ════════════════════════════════════════════════════════════════════════════
-const blankQuestion = { subject_id: "", lecture_id: "", topic: "", difficulty: "medium", stem: "", options: ["", "", "", ""], correct_answer: 0, explanation: "", board_trap: "", high_yield: "" };
+const blankQuestion = { subject_id: "", lecture_id: "", topic_id: "", difficulty: "medium", stem: "", options: ["", "", "", "", ""], correct_answer: 0, explanation: "", board_trap: "", high_yield: "" };
+
+// Pad an options array to 5 slots (A–E) so the editor always shows five inputs.
+// Legacy questions saved with 4 options get an empty 5th; trailing empties are
+// dropped again on save so we never inject a blank choice into the bank.
+const padOptions = (arr) => {
+  const a = (arr || []).map((o) => o ?? "");
+  while (a.length < 5) a.push("");
+  return a;
+};
 
 function QuestionForm({ subjects, initial, onClose, onSaved }) {
-  const [q, setQ] = useState(() => ({ ...blankQuestion, ...initial, options: initial?.options?.length ? [...initial.options] : ["", "", "", ""], subject_id: initial?.subject_id || subjects[0]?.id || "", lecture_id: initial?.lecture_id || "" }));
+  const [q, setQ] = useState(() => ({ ...blankQuestion, ...initial, options: padOptions(initial?.options), subject_id: initial?.subject_id || subjects[0]?.id || "", lecture_id: initial?.lecture_id || "", topic_id: initial?.topic_id || "" }));
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
   const editing = !!initial?.id;
   const lectures = useLectures(q.subject_id);
+  const topics = useTopics(q.subject_id);
 
   const setOpt = (i, v) => setQ((p) => ({ ...p, options: p.options.map((o, oi) => (oi === i ? v : o)) }));
 
@@ -279,14 +290,22 @@ function QuestionForm({ subjects, initial, onClose, onSaved }) {
     setErr("");
     if (!q.subject_id) return setErr("Choose a subject.");
     if (!q.stem.trim()) return setErr("Question stem is required.");
-    if (q.options.some((o) => !o.trim())) return setErr("All four options are required.");
+    // Options are flexible (4 or 5). Require at least two, filled contiguously
+    // from A, and a correct answer that points at a filled option.
+    const opts = q.options.map((o) => (o || "").trim());
+    let lastFilled = -1;
+    opts.forEach((o, i) => { if (o) lastFilled = i; });
+    if (lastFilled < 1) return setErr("Provide at least two options.");
+    const trimmedOpts = opts.slice(0, lastFilled + 1);
+    if (trimmedOpts.some((o) => !o)) return setErr("Fill options in order (A, B, C…) with no blank gaps.");
+    if (Number(q.correct_answer) > lastFilled) return setErr("The correct answer must be one of the filled options.");
     setSaving(true);
     const payload = {
       subject_id: q.subject_id,
-      topic: q.topic.trim(),
+      topic_id: q.topic_id || null,
       difficulty: q.difficulty,
       stem: q.stem.trim(),
-      options: q.options.map((o) => o.trim()),
+      options: trimmedOpts,
       correct_answer: Number(q.correct_answer),
       explanation: q.explanation.trim(),
       board_trap: q.board_trap.trim() || null,
@@ -317,7 +336,7 @@ function QuestionForm({ subjects, initial, onClose, onSaved }) {
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
         <div>
           <FieldLabel>Subject</FieldLabel>
-          <select value={q.subject_id} onChange={(e) => setQ({ ...q, subject_id: e.target.value, lecture_id: "" })} style={inputStyle}>
+          <select value={q.subject_id} onChange={(e) => setQ({ ...q, subject_id: e.target.value, lecture_id: "", topic_id: "" })} style={inputStyle}>
             {subjects.map((s) => (
               <option key={s.id} value={s.id}>{s.name}</option>
             ))}
@@ -343,11 +362,16 @@ function QuestionForm({ subjects, initial, onClose, onSaved }) {
       </div>
       <div style={{ marginBottom: 14 }}>
         <FieldLabel>Topic</FieldLabel>
-        <input value={q.topic} onChange={(e) => setQ({ ...q, topic: e.target.value })} placeholder="e.g. Beta Blockers" style={inputStyle} />
+        <select value={q.topic_id} onChange={(e) => setQ({ ...q, topic_id: e.target.value })} style={inputStyle}>
+          <option value="">— No topic —</option>
+          {topics.map((t) => (
+            <option key={t.id} value={t.id}>{t.name}</option>
+          ))}
+        </select>
       </div>
       <div style={{ marginBottom: 14 }}>
         <FieldLabel>Question stem</FieldLabel>
-        <textarea value={q.stem} onChange={(e) => setQ({ ...q, stem: e.target.value })} rows={3} style={{ ...inputStyle, resize: "vertical" }} />
+        <textarea value={q.stem} onChange={(e) => setQ({ ...q, stem: e.target.value })} rows={4} style={{ ...inputStyle, resize: "vertical" }} />
       </div>
       <FieldLabel>Options (select the correct one)</FieldLabel>
       <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
@@ -361,11 +385,11 @@ function QuestionForm({ subjects, initial, onClose, onSaved }) {
       </div>
       <div style={{ marginBottom: 14 }}>
         <FieldLabel>Explanation</FieldLabel>
-        <textarea value={q.explanation} onChange={(e) => setQ({ ...q, explanation: e.target.value })} rows={2} style={{ ...inputStyle, resize: "vertical" }} />
+        <textarea value={q.explanation} onChange={(e) => setQ({ ...q, explanation: e.target.value })} rows={4} style={{ ...inputStyle, resize: "vertical" }} />
       </div>
       <div style={{ marginBottom: 14 }}>
         <FieldLabel>Board trap (optional)</FieldLabel>
-        <input value={q.board_trap} onChange={(e) => setQ({ ...q, board_trap: e.target.value })} placeholder="Common distractor to warn about" style={inputStyle} />
+        <textarea value={q.board_trap} onChange={(e) => setQ({ ...q, board_trap: e.target.value })} rows={2} placeholder="Common distractor to warn about" style={{ ...inputStyle, resize: "vertical" }} />
       </div>
       <div>
         <FieldLabel>High-Yield summary (optional)</FieldLabel>
@@ -384,14 +408,17 @@ function ManageQuestions() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
   const [fSubject, setFSubject] = useState("all");
+  const [fTopic, setFTopic] = useState("all");
   const [fDiff, setFDiff] = useState("all");
-  const [editing, setEditing] = useState(null); // question object or {} for new
+  const [editing, setEditing] = useState(null); // question object, or {subject_id} for new
   const [hasPublished, setHasPublished] = useState(true);
+  const [notice, setNotice] = useState("");
+  const filterTopics = useTopics(fSubject === "all" ? null : fSubject);
 
   const load = async () => {
     const { data, error } = await supabase
       .from("questions")
-      .select("*, subjects(name, color)")
+      .select("*, subjects(name, color), topics(name)")
       .is("deleted_at", null)
       .order("created_at", { ascending: false });
     if (error) setErr(error.message);
@@ -411,9 +438,12 @@ function ManageQuestions() {
   const filtered = useMemo(
     () =>
       rows.filter(
-        (r) => (fSubject === "all" || r.subject_id === fSubject) && (fDiff === "all" || r.difficulty === fDiff)
+        (r) =>
+          (fSubject === "all" || r.subject_id === fSubject) &&
+          (fTopic === "all" || r.topic_id === fTopic) &&
+          (fDiff === "all" || r.difficulty === fDiff)
       ),
-    [rows, fSubject, fDiff]
+    [rows, fSubject, fTopic, fDiff]
   );
 
   const remove = async (id) => {
@@ -434,15 +464,22 @@ function ManageQuestions() {
       <AdminHeader
         title="Manage Questions"
         subtitle={`${rows.length} question${rows.length === 1 ? "" : "s"} in the bank`}
-        right={<PrimaryButton onClick={() => setEditing({})}>+ Add question</PrimaryButton>}
+        right={<PrimaryButton onClick={() => setEditing({ subject_id: fSubject !== "all" ? fSubject : "" })}>+ Add question</PrimaryButton>}
       />
       {err && <Banner>{err}</Banner>}
+      {notice && <Banner kind="success">{notice}</Banner>}
 
       <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
-        <select value={fSubject} onChange={(e) => setFSubject(e.target.value)} style={{ ...inputStyle, width: "auto" }}>
+        <select value={fSubject} onChange={(e) => { setFSubject(e.target.value); setFTopic("all"); }} style={{ ...inputStyle, width: "auto" }}>
           <option value="all">All subjects</option>
           {subjects.map((s) => (
             <option key={s.id} value={s.id}>{s.name}</option>
+          ))}
+        </select>
+        <select value={fTopic} onChange={(e) => setFTopic(e.target.value)} disabled={fSubject === "all"} style={{ ...inputStyle, width: "auto", opacity: fSubject === "all" ? 0.55 : 1 }}>
+          <option value="all">{fSubject === "all" ? "All topics (pick a subject)" : "All topics"}</option>
+          {filterTopics.map((t) => (
+            <option key={t.id} value={t.id}>{t.name}</option>
           ))}
         </select>
         <select value={fDiff} onChange={(e) => setFDiff(e.target.value)} style={{ ...inputStyle, width: "auto" }}>
@@ -474,8 +511,8 @@ function ManageQuestions() {
                 {filtered.map((r) => (
                   <tr key={r.id}>
                     <td style={{ ...td, maxWidth: 420 }}>
-                      <div style={{ fontWeight: 600, marginBottom: 2 }}>{r.topic || "—"}</div>
-                      <div style={{ fontSize: 12, color: colors.textMuted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 400 }}>{r.stem}</div>
+                      <div style={{ fontWeight: 600, marginBottom: 2 }}>{r.topics?.name || r.topic || "—"}</div>
+                      <div style={{ fontSize: 12, color: colors.textMuted, maxWidth: 400 }}>{r.stem?.length > 80 ? `${r.stem.slice(0, 80)}…` : r.stem}</div>
                     </td>
                     <td style={td}>
                       <Pill color={r.subjects?.color || colors.blue} bg={`${r.subjects?.color || colors.blue}1a`}>{r.subjects?.name || "—"}</Pill>
@@ -506,11 +543,14 @@ function ManageQuestions() {
       {editing && (
         <QuestionForm
           subjects={subjects}
-          initial={editing.id ? editing : null}
+          initial={editing.id ? editing : (editing.subject_id ? { subject_id: editing.subject_id } : null)}
           onClose={() => setEditing(null)}
           onSaved={() => {
+            const wasEdit = !!editing.id;
             setEditing(null);
             load();
+            setNotice(wasEdit ? "Question updated." : "Question added.");
+            setTimeout(() => setNotice(""), 3000);
           }}
         />
       )}
