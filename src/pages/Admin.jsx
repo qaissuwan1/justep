@@ -169,8 +169,8 @@ function DashboardOverview({ onNavigate }) {
       const startOfDay = new Date(new Date().toDateString()).toISOString();
       const [students, questions, flashcards, todayRows, recent] = await Promise.all([
         supabase.from("profiles").select("*", { count: "exact", head: true }),
-        supabase.from("questions").select("*", { count: "exact", head: true }),
-        supabase.from("flashcards").select("*", { count: "exact", head: true }),
+        supabase.from("questions").select("*", { count: "exact", head: true }).is("deleted_at", null),
+        supabase.from("flashcards").select("*", { count: "exact", head: true }).is("deleted_at", null),
         supabase.from("user_progress").select("user_id").gte("answered_at", startOfDay).limit(2000),
         supabase
           .from("user_progress")
@@ -392,6 +392,7 @@ function ManageQuestions() {
     const { data, error } = await supabase
       .from("questions")
       .select("*, subjects(name, color)")
+      .is("deleted_at", null)
       .order("created_at", { ascending: false });
     if (error) setErr(error.message);
     else {
@@ -416,8 +417,8 @@ function ManageQuestions() {
   );
 
   const remove = async (id) => {
-    if (!window.confirm("Delete this question? This cannot be undone.")) return;
-    const { error } = await supabase.from("questions").delete().eq("id", id);
+    if (!window.confirm("Delete this question? It will be hidden from students; attempt history is kept.")) return;
+    const { error } = await supabase.from("questions").update({ deleted_at: new Date().toISOString() }).eq("id", id);
     if (error) setErr(error.message);
     else setRows((r) => r.filter((x) => x.id !== id));
   };
@@ -579,7 +580,7 @@ function ManageFlashcards() {
   const [editing, setEditing] = useState(null);
 
   const load = async () => {
-    const { data, error } = await supabase.from("flashcards").select("*, subjects(name, color)").order("created_at", { ascending: false });
+    const { data, error } = await supabase.from("flashcards").select("*, subjects(name, color)").is("deleted_at", null).order("created_at", { ascending: false });
     if (error) setErr(error.message);
     else {
       setErr("");
@@ -596,8 +597,8 @@ function ManageFlashcards() {
   const filtered = useMemo(() => rows.filter((r) => fSubject === "all" || r.subject_id === fSubject), [rows, fSubject]);
 
   const remove = async (id) => {
-    if (!window.confirm("Delete this flashcard?")) return;
-    const { error } = await supabase.from("flashcards").delete().eq("id", id);
+    if (!window.confirm("Delete this flashcard? It will be hidden from students; review history is kept.")) return;
+    const { error } = await supabase.from("flashcards").update({ deleted_at: new Date().toISOString() }).eq("id", id);
     if (error) setErr(error.message);
     else setRows((r) => r.filter((x) => x.id !== id));
   };
@@ -893,8 +894,8 @@ function ManageLectures() {
       setLoading(true);
       const [lec, q, f] = await Promise.all([
         supabase.from("lectures").select("*").eq("subject_id", activeSubject).order("order_index").order("title"),
-        supabase.from("questions").select("lecture_id").eq("subject_id", activeSubject),
-        supabase.from("flashcards").select("lecture_id").eq("subject_id", activeSubject),
+        supabase.from("questions").select("lecture_id").eq("subject_id", activeSubject).is("deleted_at", null),
+        supabase.from("flashcards").select("lecture_id").eq("subject_id", activeSubject).is("deleted_at", null),
       ]);
       if (!active) return;
       if (lec.error) setErr(lec.error.message);

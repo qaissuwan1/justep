@@ -114,7 +114,7 @@ export default function Questions() {
         supabase.from("systems").select("id,name").order("name"),
         supabase.from("subjects").select("id,name,system_id").order("name"),
         supabase.from("lectures").select("id,title,subject_id,order_index").order("order_index"),
-        supabase.from("questions").select("id,subject_id,lecture_id").eq("published", true),
+        supabase.from("questions").select("id,subject_id,lecture_id").eq("published", true).is("deleted_at", null),
         user
           ? supabase.from("user_progress").select("question_id,is_correct,answered_at").eq("user_id", user.id)
           : Promise.resolve({ data: [] }),
@@ -208,7 +208,7 @@ export default function Questions() {
     const take = Math.min(Math.max(1, Number.isNaN(parsed) ? 1 : parsed), ids.length);
     setStarting(true);
     const chosenIds = shuffle(ids).slice(0, take);
-    const { data, error } = await supabase.from("questions").select("*").in("id", chosenIds);
+    const { data, error } = await supabase.from("questions").select("*").in("id", chosenIds).is("deleted_at", null);
     setStarting(false);
     if (error || !data || data.length === 0) {
       setSetupError("Could not load questions. Try again.");

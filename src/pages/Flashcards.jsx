@@ -134,7 +134,7 @@ export default function Flashcards() {
           supabase.from("systems").select("id,name,color").order("name"),
           supabase.from("subjects").select("id,name,color,exam_date,system_id").order("name"),
           supabase.from("lectures").select("id,title,lecture_date,order_index,subject_id").order("order_index"),
-          supabase.from("flashcards").select("id,subject_id,lecture_id"),
+          supabase.from("flashcards").select("id,subject_id,lecture_id").is("deleted_at", null),
           supabase.from("flashcard_progress").select("flashcard_id,next_review").eq("user_id", user.id),
         ]);
         const failed = results.find((r) => r.error);
@@ -270,7 +270,7 @@ export default function Flashcards() {
     setError(false);
     try {
       if (multi) {
-        let query = supabase.from("flashcards").select("id,front,back");
+        let query = supabase.from("flashcards").select("id,front,back").is("deleted_at", null);
         if (subIds.length && lecIds.length) query = query.or(`subject_id.in.(${subIds.join(",")}),lecture_id.in.(${lecIds.join(",")})`);
         else if (subIds.length) query = query.in("subject_id", subIds);
         else query = query.in("lecture_id", lecIds);
@@ -283,8 +283,8 @@ export default function Flashcards() {
         buildAndStart(cardsRes.data, progRes.data, exam, `Multi-deck · ${parts.join(" · ")}`);
       } else {
         const q = lecId === "all"
-          ? supabase.from("flashcards").select("id,front,back").eq("subject_id", subId)
-          : supabase.from("flashcards").select("id,front,back").eq("lecture_id", lecId);
+          ? supabase.from("flashcards").select("id,front,back").eq("subject_id", subId).is("deleted_at", null)
+          : supabase.from("flashcards").select("id,front,back").eq("lecture_id", lecId).is("deleted_at", null);
         const [cardsRes, progRes] = await Promise.all([q, supabase.from("flashcard_progress").select("*").eq("user_id", userId)]);
         if (cardsRes.error || progRes.error) throw cardsRes.error || progRes.error;
         const subj = allSubjects.find((s) => s.id === subId);

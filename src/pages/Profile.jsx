@@ -32,7 +32,7 @@ export default function Profile() {
           supabase.from("user_progress").select("question_id,is_correct,answered_at").eq("user_id", user.id),
           supabase.from("flashcard_progress").select("id").eq("user_id", user.id),
           supabase.from("subjects").select("id,name,exam_date"),
-          supabase.from("questions").select("id,subject_id"),
+          supabase.from("questions").select("id,subject_id").is("deleted_at", null),
         ]);
 
       const latest = {};

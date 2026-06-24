@@ -142,7 +142,8 @@ export default function ImportJson() {
         const { data: existing } = await supabase
           .from("questions")
           .select("stem")
-          .eq("subject_id", subjectId);
+          .eq("subject_id", subjectId)
+          .is("deleted_at", null);
         const existingStems = new Set((existing || []).map((e) => e.stem.trim().toLowerCase()));
 
         const toInsert = [];
