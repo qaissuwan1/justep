@@ -20,6 +20,7 @@ const ADMIN_NAV = [
   { id: "questions", icon: "📋", label: "Manage Questions" },
   { id: "flashcards", icon: "🃏", label: "Manage Flashcards" },
   { id: "subjects", icon: "📚", label: "Manage Subjects" },
+  { id: "manageTopics", icon: "🏷️", label: "Manage Topics" },
   { id: "lectures", icon: "🎓", label: "Manage Lectures" },
   { id: "systems", icon: "🗂️", label: "Manage Systems" },
   { id: "users", icon: "👥", label: "User Management" },
@@ -842,6 +843,228 @@ function ManageSubjects() {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// MANAGE TOPICS
+// ════════════════════════════════════════════════════════════════════════════
+function TopicForm({ subjects, defaultSubject, initial, nextOrder, onClose, onSaved }) {
+  const [t, setT] = useState({
+    subject_id: initial?.subject_id || defaultSubject || subjects[0]?.id || "",
+    name: initial?.name || "",
+    order_index: initial?.order_index ?? nextOrder ?? 0,
+  });
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
+  const editing = !!initial?.id;
+
+  const save = async () => {
+    setErr("");
+    if (!t.subject_id) return setErr("Choose a subject.");
+    if (!t.name.trim()) return setErr("Topic name is required.");
+    setSaving(true);
+    const payload = {
+      subject_id: t.subject_id,
+      name: t.name.trim(),
+      order_index: Number(t.order_index) || 0,
+    };
+    const res = editing
+      ? await supabase.from("topics").update(payload).eq("id", initial.id)
+      : await supabase.from("topics").insert(payload);
+    setSaving(false);
+    if (res.error) {
+      return setErr(
+        res.error.code === "23505"
+          ? "A topic with that name already exists in this subject."
+          : res.error.message
+      );
+    }
+    onSaved();
+  };
+
+  return (
+    <Modal
+      title={editing ? "Edit topic" : "Add topic"}
+      onClose={onClose}
+      footer={
+        <>
+          <GhostButton onClick={onClose}>Cancel</GhostButton>
+          <PrimaryButton onClick={save} style={{ opacity: saving ? 0.7 : 1, pointerEvents: saving ? "none" : "auto" }}>{saving ? "Saving…" : "Save"}</PrimaryButton>
+        </>
+      }
+    >
+      {err && <Banner>{err}</Banner>}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 110px", gap: 14, marginBottom: 14 }}>
+        <div>
+          <FieldLabel>Subject</FieldLabel>
+          <select value={t.subject_id} onChange={(e) => setT({ ...t, subject_id: e.target.value })} style={inputStyle}>
+            {subjects.map((s) => (
+              <option key={s.id} value={s.id}>{s.name}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <FieldLabel>Order</FieldLabel>
+          <input type="number" value={t.order_index} onChange={(e) => setT({ ...t, order_index: e.target.value })} style={inputStyle} />
+        </div>
+      </div>
+      <div>
+        <FieldLabel>Topic name</FieldLabel>
+        <input value={t.name} onChange={(e) => setT({ ...t, name: e.target.value })} placeholder="e.g. Beta Blockers" style={inputStyle} />
+      </div>
+    </Modal>
+  );
+}
+
+function ManageTopics() {
+  const subjects = useSubjects();
+  const [rows, setRows] = useState([]); // topics with subject join
+  const [qCount, setQCount] = useState({});
+  const [fCount, setFCount] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  const [fSubject, setFSubject] = useState("all");
+  const [editing, setEditing] = useState(null);
+  const [reloadKey, setReloadKey] = useState(0);
+  const bump = () => setReloadKey((k) => k + 1);
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      setLoading(true);
+      const [tp, q, f] = await Promise.all([
+        supabase.from("topics").select("*, subjects(name)").order("subject_id").order("order_index"),
+        supabase.from("questions").select("topic_id").is("deleted_at", null),
+        supabase.from("flashcards").select("topic_id").is("deleted_at", null),
+      ]);
+      if (!active) return;
+      if (tp.error) setErr(tp.error.message);
+      else {
+        setErr("");
+        setRows(tp.data || []);
+        const tally = (arr) => {
+          const m = {};
+          (arr || []).forEach((r) => {
+            if (r.topic_id) m[r.topic_id] = (m[r.topic_id] || 0) + 1;
+          });
+          return m;
+        };
+        setQCount(tally(q.data));
+        setFCount(tally(f.data));
+      }
+      setLoading(false);
+    })();
+    return () => {
+      active = false;
+    };
+  }, [reloadKey]);
+
+  const filtered = useMemo(
+    () => rows.filter((r) => fSubject === "all" || r.subject_id === fSubject),
+    [rows, fSubject]
+  );
+
+  // Next order_index within a subject (Add prefill).
+  const nextOrderFor = (subjId) =>
+    rows.filter((r) => r.subject_id === subjId).reduce((m, r) => Math.max(m, r.order_index ?? 0), -1) + 1;
+
+  const remove = async (row) => {
+    const qc = qCount[row.id] || 0;
+    const fc = fCount[row.id] || 0;
+    if (qc > 0 || fc > 0) {
+      setErr(`Cannot delete topic with content. "${row.name}" has ${qc} question${qc === 1 ? "" : "s"} and ${fc} flashcard${fc === 1 ? "" : "s"}. Reassign or remove them first.`);
+      return;
+    }
+    if (!window.confirm(`Delete topic "${row.name}"? This cannot be undone.`)) return;
+    const { error } = await supabase.from("topics").delete().eq("id", row.id);
+    if (error) setErr(error.message);
+    else { setErr(""); bump(); }
+  };
+
+  const addSubject = fSubject !== "all" ? fSubject : subjects[0]?.id || "";
+
+  return (
+    <>
+      <AdminHeader
+        title="Manage Topics"
+        subtitle={`${rows.length} topic${rows.length === 1 ? "" : "s"}`}
+        right={
+          <PrimaryButton
+            onClick={() => setEditing({ subject_id: addSubject })}
+            style={subjects.length ? undefined : { opacity: 0.5, pointerEvents: "none" }}
+          >
+            + Add topic
+          </PrimaryButton>
+        }
+      />
+      {err && <Banner>{err}</Banner>}
+
+      <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
+        <select value={fSubject} onChange={(e) => setFSubject(e.target.value)} style={{ ...inputStyle, width: "auto" }}>
+          <option value="all">All subjects</option>
+          {subjects.map((s) => (
+            <option key={s.id} value={s.id}>{s.name}</option>
+          ))}
+        </select>
+      </div>
+
+      <Card style={{ padding: 0, overflow: "hidden" }}>
+        {loading ? (
+          <Spinner />
+        ) : subjects.length === 0 ? (
+          <EmptyState icon="📚">Create a subject first, then add topics to it.</EmptyState>
+        ) : filtered.length === 0 ? (
+          <EmptyState icon="🏷️">No topics{fSubject === "all" ? " yet" : " for this subject"}. Add the first one.</EmptyState>
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ background: "#F8FAFF" }}>
+                  <th style={{ ...th, width: 70 }}>Order</th>
+                  <th style={th}>Topic</th>
+                  <th style={th}>Subject</th>
+                  <th style={th}>Questions</th>
+                  <th style={th}>Flashcards</th>
+                  <th style={{ ...th, textAlign: "right" }}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((t) => (
+                  <tr key={t.id}>
+                    <td style={td}><span style={{ fontWeight: 700, color: colors.textMuted }}>{t.order_index}</span></td>
+                    <td style={{ ...td, fontWeight: 600 }}>{t.name}</td>
+                    <td style={td}>
+                      <Pill color={colors.blue} bg={`${colors.blue}1a`}>{t.subjects?.name || "—"}</Pill>
+                    </td>
+                    <td style={td}>{qCount[t.id] || 0}</td>
+                    <td style={td}>{fCount[t.id] || 0}</td>
+                    <td style={{ ...td, textAlign: "right", whiteSpace: "nowrap" }}>
+                      <button onClick={() => setEditing(t)} style={{ ...iconBtn, marginRight: 6 }}>Edit</button>
+                      <button onClick={() => remove(t)} style={{ ...iconBtn, color: colors.red, borderColor: "#FECACA" }}>Delete</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+
+      {editing && (
+        <TopicForm
+          subjects={subjects}
+          defaultSubject={editing.subject_id || addSubject}
+          initial={editing.id ? editing : null}
+          nextOrder={nextOrderFor(editing.subject_id || addSubject)}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
+            bump();
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // MANAGE LECTURES
 // ════════════════════════════════════════════════════════════════════════════
 function LectureForm({ subjects, defaultSubject, initial, nextOrder, onClose, onSaved }) {
@@ -1559,6 +1782,7 @@ export default function Admin() {
     questions: <ManageQuestions />,
     flashcards: <ManageFlashcards />,
     subjects: <ManageSubjects />,
+    manageTopics: <ManageTopics />,
     lectures: <ManageLectures />,
     systems: <ManageSystems />,
     users: <UserManagement />,
