@@ -8,7 +8,7 @@ import ForgotPassword from "./pages/ForgotPassword";
 import ResetPassword from "./pages/ResetPassword";
 import Privacy from "./pages/Privacy";
 import Terms from "./pages/Terms";
-import Home from "./pages/Home";
+import StudyDashboard from "./pages/StudyDashboard";
 import Questions from "./pages/Questions";
 import Flashcards from "./pages/Flashcards";
 import Subjects from "./pages/Subjects";
@@ -52,7 +52,8 @@ export default function App() {
           }
         >
           <Route index element={<Navigate to="/app/home" replace />} />
-          <Route path="home" element={<Home />} />
+          <Route path="home" element={<StudyDashboard />} />
+          <Route path="dashboard" element={<StudyDashboard />} />
           <Route path="questions" element={<Questions />} />
           <Route path="flashcards" element={<Flashcards />} />
           <Route path="subjects" element={<Subjects />} />
