@@ -55,6 +55,34 @@ function fmtDate(d) {
   });
 }
 
+/* ---- mastery band → label + colors (mirrors migration 017 mastery_band) ---- */
+const BANDS = {
+  "Not Started": { color: "#6B7280", bg: "#F3F4F6" },
+  Learning: { color: colors.red, bg: "#FEE2E2" },
+  Reviewing: { color: colors.amber, bg: "#FEF3C7" },
+  Proficient: { color: colors.blue, bg: "#DBEAFE" },
+  Mastered: { color: colors.green, bg: "#DCFCE7" },
+};
+function bandOf(score) {
+  if (score == null) return "Not Started";
+  if (score <= 40) return "Learning";
+  if (score <= 60) return "Reviewing";
+  if (score <= 80) return "Proficient";
+  return "Mastered";
+}
+// Today's Mission: dot + suggested action by score band.
+function missionDot(score) {
+  const s = score ?? 0;
+  return s <= 40 ? "🔴" : s <= 60 ? "🟠" : s <= 80 ? "🟡" : "🟢";
+}
+function missionAction(score) {
+  const s = score ?? 0;
+  if (s <= 40) return { text: "Solve 10 questions", to: "/app/questions" };
+  if (s <= 60) return { text: "Review 15 flashcards", to: "/app/flashcards" };
+  if (s <= 80) return { text: "Solve 5 questions", to: "/app/questions" };
+  return { text: "Keep it sharp — review flashcards", to: "/app/flashcards" };
+}
+
 export default function StudentAnalytics({ userId = null, mode = "self" }) {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
@@ -63,6 +91,10 @@ export default function StudentAnalytics({ userId = null, mode = "self" }) {
   const [profile, setProfile] = useState(null);
   const [rows, setRows] = useState([]); // user_progress joined to questions->subjects
   const [cardsReviewed, setCardsReviewed] = useState(0);
+  // Smart widgets (mastery map / mission / at-risk) load independently so a
+  // mastery RPC failure degrades gracefully instead of breaking the dashboard.
+  const [mastery, setMastery] = useState(null); // { systems, mission, atRisk }
+  const [masteryLoading, setMasteryLoading] = useState(true);
 
   useEffect(() => {
     let active = true;
@@ -110,6 +142,85 @@ export default function StudentAnalytics({ userId = null, mode = "self" }) {
       active = false;
     };
   }, [userId, mode, reloadKey]);
+
+  // Smart widgets — only for the personal Home dashboard (self mode). All three
+  // sections load in parallel via Promise.all; RPC names/params match migration 017.
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      if (mode !== "self") {
+        if (active) setMasteryLoading(false);
+        return;
+      }
+      setMasteryLoading(true);
+      try {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        const uid = user?.id;
+        if (!uid) {
+          if (active) {
+            setMastery(null);
+            setMasteryLoading(false);
+          }
+          return;
+        }
+        const now = new Date().toISOString();
+
+        const [systems, mission, atRisk] = await Promise.all([
+          // SECTION 1 — Mastery Map: every system, scored.
+          (async () => {
+            const { data: sys } = await supabase.from("systems").select("id,name").order("name");
+            return Promise.all(
+              (sys || []).map(async (s) => {
+                const { data: score } = await supabase.rpc("mastery_system", {
+                  p_user_id: uid,
+                  p_system_id: s.id,
+                  as_of: now,
+                });
+                return { id: s.id, name: s.name, score: score == null ? null : Number(score) };
+              })
+            );
+          })(),
+          // SECTION 2 — Today's Mission: weakest 3 of the subjects the user has attempted.
+          (async () => {
+            const { data: att } = await supabase
+              .from("user_progress")
+              .select("questions(subject_id, subjects(name))")
+              .eq("user_id", uid);
+            const seen = new Map();
+            (att || []).forEach((r) => {
+              const sid = r.questions?.subject_id;
+              if (sid && !seen.has(sid)) seen.set(sid, r.questions?.subjects?.name || "Subject");
+            });
+            const scored = await Promise.all(
+              [...seen].map(async ([sid, name]) => {
+                const { data: score } = await supabase.rpc("mastery_subject", {
+                  p_user_id: uid,
+                  p_subject_id: sid,
+                  as_of: now,
+                });
+                return { id: sid, name, score: score == null ? 0 : Number(score) }; // null → 0
+              })
+            );
+            return scored.sort((a, b) => a.score - b.score).slice(0, 3);
+          })(),
+          // SECTION 3 — At-Risk: already ordered by severity in the function.
+          supabase.rpc("at_risk_topics", { p_user_id: uid, as_of: now }).then(({ data }) => data || []),
+        ]);
+
+        if (!active) return;
+        setMastery({ systems, mission, atRisk: (atRisk || []).slice(0, 3) });
+      } catch {
+        if (active) setMastery(null); // hide the widgets on failure
+      } finally {
+        if (active) setMasteryLoading(false);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [mode, reloadKey]);
 
   const retry = () => setReloadKey((k) => k + 1);
 
@@ -377,7 +488,120 @@ export default function StudentAnalytics({ userId = null, mode = "self" }) {
           </div>
         </div>
       )}
+
+      {/* SMART WIDGETS — self only: Mastery Map → Today's Mission → At-Risk */}
+      {isSelf &&
+        (masteryLoading ? (
+          <MasterySkeletons />
+        ) : (
+          mastery && (
+            <>
+              <MasteryMap systems={mastery.systems} />
+              <TodaysMission mission={mastery.mission} navigate={navigate} />
+              {mastery.atRisk.length > 0 && <AtRiskAlerts items={mastery.atRisk} navigate={navigate} />}
+            </>
+          )
+        ))}
     </div>
+  );
+}
+
+/* ---------------- smart widgets ---------------- */
+function SectionHead({ title, subtitle }) {
+  return (
+    <>
+      <h3 style={{ ...cardTitle, marginBottom: 4 }}>{title}</h3>
+      <div style={sectionSub}>{subtitle}</div>
+    </>
+  );
+}
+
+function MasteryMap({ systems }) {
+  return (
+    <div style={{ ...cardStyle, marginTop: 18 }}>
+      <SectionHead title="Mastery Map" subtitle="Your progress across all systems" />
+      {systems.length === 0 ? (
+        <p style={{ color: colors.textMuted, fontSize: 14, margin: 0 }}>No systems set up yet.</p>
+      ) : (
+        systems.map((s) => {
+          const band = bandOf(s.score);
+          const bc = BANDS[band];
+          const pct = s.score == null ? 0 : Math.round(s.score);
+          return (
+            <div key={s.id} style={mapRow}>
+              <div style={{ flex: "0 0 140px", fontSize: 14, color: colors.text, textTransform: "capitalize" }}>{s.name}</div>
+              <span style={{ ...bandBadge, background: bc.bg, color: bc.color }}>{band}</span>
+              <div style={{ ...track, flex: "1 1 110px", minWidth: 90 }}>
+                <div style={{ ...trackFill, width: `${pct}%`, background: bc.color }} />
+              </div>
+              <div style={{ width: 40, textAlign: "right", fontSize: 13, fontWeight: 700, color: colors.text }}>{pct}%</div>
+            </div>
+          );
+        })
+      )}
+    </div>
+  );
+}
+
+function TodaysMission({ mission, navigate }) {
+  return (
+    <div style={{ ...cardStyle, marginTop: 18 }}>
+      <SectionHead title="Today's Mission" subtitle="Focus on these today" />
+      {mission.length === 0 ? (
+        <p style={{ color: colors.textMuted, fontSize: 14, margin: 0 }}>Complete some questions to see your mission.</p>
+      ) : (
+        mission.map((m) => {
+          const act = missionAction(m.score);
+          return (
+            <div key={m.id} style={missionCard}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+                <span style={{ fontSize: 18 }}>{missionDot(m.score)}</span>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: colors.text, textTransform: "capitalize" }}>{m.name}</div>
+                  <div style={{ fontSize: 12, color: colors.textSoft }}>{Math.round(m.score)}% · {bandOf(m.score)}</div>
+                </div>
+              </div>
+              <button style={missionBtn} onClick={() => navigate(act.to)}>→ {act.text}</button>
+            </div>
+          );
+        })
+      )}
+    </div>
+  );
+}
+
+function AtRiskAlerts({ items, navigate }) {
+  return (
+    <div style={{ ...cardStyle, marginTop: 18, border: "1px solid #FED7AA" }}>
+      <SectionHead title="⚠️ At-Risk Topics" subtitle="You knew these — don't forget them" />
+      {items.map((t) => (
+        <div key={t.topic_id} style={atRiskCard}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: colors.text }}>⚠️ {t.topic_name}</div>
+          <div style={{ fontSize: 12, color: colors.textSoft, margin: "4px 0 6px" }}>
+            Strength {Math.round(t.k)}% · Retention {Math.round((t.rho ?? 0) * 100)}%
+          </div>
+          <div style={{ fontSize: 13, color: colors.textSoft, marginBottom: 10 }}>
+            You understood this topic but haven't reviewed it recently.
+          </div>
+          <button style={missionBtn} onClick={() => navigate("/app/flashcards")}>Review Flashcards</button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function MasterySkeletons() {
+  return (
+    <>
+      {[0, 1].map((i) => (
+        <div key={i} style={{ ...cardStyle, marginTop: 18 }}>
+          <Skeleton width={160} height={14} style={{ marginBottom: 16 }} />
+          {[0, 1, 2].map((j) => (
+            <Skeleton key={j} height={30} style={{ marginBottom: 12 }} />
+          ))}
+        </div>
+      ))}
+    </>
   );
 }
 
@@ -521,6 +745,35 @@ const cardTitle = { fontSize: 15, fontWeight: 700, color: colors.text, margin: "
 const twoCol = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 14 };
 const track = { height: 8, borderRadius: 99, background: colors.line, overflow: "hidden" };
 const trackFill = { height: "100%", borderRadius: 99 };
+
+/* smart-widget styles */
+const sectionSub = { fontSize: 13, color: colors.textSoft, margin: "0 0 16px" };
+const mapRow = { display: "flex", alignItems: "center", gap: 10, marginBottom: 14, flexWrap: "wrap" };
+const bandBadge = { fontSize: 11, fontWeight: 700, padding: "3px 10px", borderRadius: 99, whiteSpace: "nowrap" };
+const missionCard = {
+  border: `1px solid ${colors.line}`,
+  borderRadius: 12,
+  padding: "12px 14px",
+  marginBottom: 10,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 12,
+  flexWrap: "wrap",
+};
+const missionBtn = {
+  background: "#fff",
+  color: colors.navy,
+  border: `1.5px solid ${colors.line}`,
+  borderRadius: 9,
+  padding: "8px 14px",
+  fontSize: 13,
+  fontWeight: 700,
+  cursor: "pointer",
+  fontFamily: font,
+  whiteSpace: "nowrap",
+};
+const atRiskCard = { border: "1px solid #FED7AA", background: "#FFFBEB", borderRadius: 12, padding: "14px 16px", marginBottom: 10 };
 
 const filledBtn = {
   background: gradients.accent,
