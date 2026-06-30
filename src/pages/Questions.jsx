@@ -1,7 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useSearchParams, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import useIsMobile from "../lib/useIsMobile";
+import SessionBar, { SESSION_BAR_H } from "../components/SessionBar";
+import { goToNextTask } from "../lib/session";
 
 /* ------------------------------------------------------------------ */
 /*  JUStep — UWorld-style Question Bank                                */
@@ -51,7 +53,9 @@ const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 export default function Questions() {
   const isMobile = useIsMobile();
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
   const incorrectMode = searchParams.get("mode") === "incorrect";
+  const sessionMode = searchParams.get("session") === "1";
   const [phase, setPhase] = useState("setup"); // setup | running | summary
 
   /* -------- shared data -------- */
@@ -437,6 +441,9 @@ export default function Questions() {
 
   if (phase === "setup")
     return (
+      <>
+        {sessionMode && <SessionBar />}
+        <div style={{ paddingTop: sessionMode ? SESSION_BAR_H : 0 }}>
       <Setup
         loadingMeta={loadingMeta}
         noIncorrect={noIncorrect}
@@ -461,10 +468,15 @@ export default function Questions() {
         starting={starting}
         setupError={setupError}
       />
+        </div>
+      </>
     );
 
   if (phase === "summary")
     return (
+      <>
+        {sessionMode && <SessionBar />}
+        <div style={{ paddingTop: sessionMode ? SESSION_BAR_H : 0 }}>
       <Results
         questions={questions}
         selected={selected}
@@ -478,7 +490,11 @@ export default function Questions() {
         systems={systems}
         openReview={openReview}
         newBlock={newBlock}
+        sessionMode={sessionMode}
+        onNextTask={() => goToNextTask(navigate)}
       />
+        </div>
+      </>
     );
 
   /* -------- running / review (full-screen overlay) -------- */
@@ -490,7 +506,9 @@ export default function Questions() {
   const isCorrect = sel === current.correct_answer;
 
   return (
-    <div style={{ position: "fixed", inset: 0, zIndex: 1000, background: "#F8FAFC", display: "flex", flexDirection: "column", color: TEXT }}>
+    <>
+      {sessionMode && <SessionBar />}
+      <div style={{ position: "fixed", top: sessionMode ? SESSION_BAR_H : 0, left: 0, right: 0, bottom: 0, zIndex: 1000, background: "#F8FAFC", display: "flex", flexDirection: "column", color: TEXT }}>
       {/* TOP BAR */}
       <div style={{ background: NAVY, color: "#fff", padding: "8px 16px", display: "flex", alignItems: "center", gap: isMobile ? 8 : 16, flexShrink: 0, flexWrap: isMobile ? "wrap" : "nowrap" }}>
         <div style={{ background: NAVY_2, borderRadius: 8, padding: "6px 12px", fontWeight: 700, fontSize: 14 }}>
@@ -698,6 +716,7 @@ export default function Questions() {
         )}
       </div>
     </div>
+    </>
   );
 }
 
@@ -1123,7 +1142,7 @@ function Locked({ children }) {
 /* ================================================================== */
 /*  RESULTS SCREEN                                                    */
 /* ================================================================== */
-function Results({ questions, selected, flagged, answerSecs, elapsed, mode, poolLabel, testId, subjects, systems, openReview, newBlock }) {
+function Results({ questions, selected, flagged, answerSecs, elapsed, mode, poolLabel, testId, subjects, systems, openReview, newBlock, sessionMode, onNextTask }) {
   const [tab, setTab] = useState("results");
   const tableRef = useRef(null);
 
@@ -1160,6 +1179,7 @@ function Results({ questions, selected, flagged, answerSecs, elapsed, mode, pool
             <span style={{ fontSize: 13, color: MUTED }}>Test Id: {shortId(testId)}</span>
           </div>
           <div style={{ flex: 1 }} />
+          {sessionMode && <button onClick={onNextTask} style={{ ...primaryBtn, background: GREEN }}>Next task →</button>}
           <button onClick={() => openReview(0)} style={primaryBtn}>Review Test</button>
           <button onClick={() => tableRef.current?.scrollIntoView({ behavior: "smooth" })} style={ghostBtn}>Question List</button>
           <button onClick={newBlock} style={{ ...primaryBtn, background: GREEN }}>New Test</button>

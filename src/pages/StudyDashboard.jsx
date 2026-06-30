@@ -3,9 +3,10 @@
 //   study_queue_summary · get_study_queue · at_risk_topics · weak_concepts · mastery_system
 // Light/blue visual language from the design (distinct from the app's navy shell).
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import useIsMobile from "../lib/useIsMobile";
+import { taskRoute, startSession as createSession, readSession, clearSession, isResumable, taskLabel, currentUserId } from "../lib/session";
 
 /* ---- design tokens (from the .dc.html) ---- */
 const FONT = "'Geist',-apple-system,system-ui,sans-serif";
@@ -72,28 +73,17 @@ function ringColor(score) {
   return "#2B7FFF"; // on track
 }
 
-// Route a queue task to the right deep-linked page.
-function routeFor(item) {
-  switch (item?.item_type) {
-    case "WRONG_QUESTION":
-      return "/app/questions?mode=incorrect";
-    case "FLASHCARD_DUE":
-      return "/app/flashcards?mode=due";
-    case "LECTURE_UNFINISHED":
-      return item.ref_id ? `/app/subjects?lecture=${item.ref_id}` : "/app/subjects";
-    default:
-      return "/app/questions"; // RECOMMENDED → normal setup
-  }
-}
-
 export default function StudyDashboard() {
   const navigate = useNavigate();
   const isMobile = useIsMobile();
+  const [searchParams] = useSearchParams();
+  const sessionComplete = searchParams.get("session") === "complete";
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const [data, setData] = useState(null);
   const [done, setDone] = useState(() => new Set()); // session-only checked tasks (by index)
+  const [userId, setUserId] = useState(null);
 
   useEffect(() => {
     let active = true;
@@ -132,6 +122,7 @@ export default function StudyDashboard() {
         ]);
 
         if (!active) return;
+        setUserId(uid);
         const fullName = profile?.full_name || profile?.email?.split("@")[0] || "there";
         setData({
           firstName: fullName.split(" ")[0],
@@ -160,11 +151,22 @@ export default function StudyDashboard() {
       return next;
     });
 
-  const startSession = () => {
+  const startSession = async () => {
     const queue = data?.queue || [];
-    const firstOpen = queue.find((_, i) => !done.has(i)) || queue[0];
-    navigate(firstOpen ? routeFor(firstOpen) : "/app/questions");
+    if (!queue.length) {
+      navigate("/app/questions");
+      return;
+    }
+    // Resolve the uid robustly — fall back to a fresh lookup if state is empty,
+    // otherwise the session never gets written (URL would carry &session=1 but
+    // sessionStorage stays empty → no SessionBar).
+    const uid = userId || (await currentUserId());
+    const session = uid ? createSession(uid, queue) : null; // capture the ordered queue at index 0
+    console.log("[StudyDashboard] Start session — queue length:", queue.length, "uid:", uid, "session:", session);
+    navigate(taskRoute(queue[0], true));
   };
+
+  if (sessionComplete) return <CompletionScreen isMobile={isMobile} />;
 
   if (loading) return <LoadingView isMobile={isMobile} />;
   if (error)
@@ -183,6 +185,14 @@ export default function StudyDashboard() {
   const total = queue.length;
   const doneCount = [...done].filter((i) => i < total).length;
   const progressPct = total ? Math.round((doneCount / total) * 100) : 0;
+
+  // Resume an in-progress session for today (set during this browser session).
+  const activeSession = userId ? readSession(userId) : null;
+  const canResume = isResumable(activeSession);
+  const resumeSession = () => {
+    if (!canResume) return;
+    navigate(taskRoute(activeSession.tasks[activeSession.currentIndex], true));
+  };
 
   return (
     <Shell isMobile={isMobile}>
@@ -217,7 +227,12 @@ export default function StudyDashboard() {
             <span style={{ fontSize: 12, color: MUTED2, fontWeight: 500, whiteSpace: "nowrap" }}>{doneCount}/{total} complete</span>
           </div>
         </div>
-        <button onClick={startSession} style={btnPrimary}>Start session</button>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, flexShrink: 0 }}>
+          {canResume && (
+            <button onClick={resumeSession} style={btnPrimary}>Resume session</button>
+          )}
+          <button onClick={startSession} style={canResume ? btnGhost : btnPrimary}>Start session</button>
+        </div>
       </section>
 
       {/* STUDY QUEUE */}
@@ -245,7 +260,7 @@ export default function StudyDashboard() {
                     )}
                   </button>
                   <div style={{ width: 7, height: 7, borderRadius: "50%", marginTop: 6, flexShrink: 0, background: sev.dot }} />
-                  <div style={{ flex: 1, minWidth: 0, cursor: "pointer" }} onClick={() => navigate(routeFor(row))}>
+                  <div style={{ flex: 1, minWidth: 0, cursor: "pointer" }} onClick={() => navigate(taskRoute(row, false))}>
                     <div style={{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap" }}>
                       <span style={{ fontSize: 14, fontWeight: 500, letterSpacing: "-0.01em", color: isDone ? "#B2B2B8" : "#22222A", textDecoration: isDone ? "line-through" : "none" }}>{row.title}</span>
                       <span style={{ fontSize: 10.5, fontWeight: 600, letterSpacing: "0.03em", textTransform: "uppercase", padding: "2px 7px", borderRadius: 5, background: sev.pillBg, color: sev.pillColor }}>{sev.label}</span>
@@ -405,3 +420,66 @@ const btnPrimary = {
   letterSpacing: "-0.01em",
   cursor: "pointer",
 };
+const btnGhost = {
+  flexShrink: 0,
+  background: "#fff",
+  color: INK2,
+  border: `1px solid ${LINE}`,
+  borderRadius: 9,
+  padding: "11px 20px",
+  fontFamily: FONT,
+  fontSize: 14,
+  fontWeight: 550,
+  letterSpacing: "-0.01em",
+  cursor: "pointer",
+};
+
+/* ---------------- session completion screen (?session=complete) ---------------- */
+function CompletionScreen({ isMobile }) {
+  const navigate = useNavigate();
+  const [uid, setUid] = useState(null);
+  const [info, setInfo] = useState(null); // { n, types: [] }
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      const id = await currentUserId();
+      if (!active) return;
+      setUid(id);
+      const s = id ? readSession(id) : null;
+      const tasks = s?.tasks || [];
+      setInfo({ n: tasks.length, types: [...new Set(tasks.map((t) => t.item_type))].map(taskLabel) });
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const back = () => {
+    if (uid) clearSession(uid); // streak is derived from logged activity — already counted today
+    navigate("/app/home");
+  };
+
+  const n = info?.n ?? 0;
+  return (
+    <Shell isMobile={isMobile}>
+      <div style={{ background: "#fff", border: `1px solid ${LINE}`, borderRadius: 16, padding: "48px 28px", textAlign: "center", marginTop: 8 }}>
+        <div style={{ fontSize: 52 }}>🎉</div>
+        <h1 style={{ fontSize: 24, fontWeight: 600, color: INK, margin: "14px 0 6px", letterSpacing: "-0.02em" }}>You're done for today!</h1>
+        <p style={{ fontSize: 14, color: MUTED, margin: 0 }}>
+          Today you completed {n} task{n === 1 ? "" : "s"}.
+        </p>
+        {info?.types?.length > 0 && (
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center", marginTop: 16 }}>
+            {info.types.map((t) => (
+              <span key={t} style={{ fontSize: 12.5, color: "#2563C9", background: "#E8F1FF", borderRadius: 999, padding: "5px 12px", fontWeight: 500 }}>{t}</span>
+            ))}
+          </div>
+        )}
+        <div>
+          <button onClick={back} style={{ ...btnPrimary, marginTop: 26 }}>Back to dashboard</button>
+        </div>
+      </div>
+    </Shell>
+  );
+}

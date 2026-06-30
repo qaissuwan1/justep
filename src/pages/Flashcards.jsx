@@ -1,9 +1,11 @@
 import { useState, useEffect, useRef } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useSearchParams, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { font } from "../theme";
 import useIsMobile from "../lib/useIsMobile";
 import Skeleton from "../components/Skeleton";
+import SessionBar, { SESSION_BAR_H } from "../components/SessionBar";
+import { goToNextTask } from "../lib/session";
 
 const DAY = 24 * 60 * 60 * 1000;
 const startOfDay = (d) => { const x = new Date(d); x.setHours(0,0,0,0); return x; };
@@ -87,7 +89,9 @@ const RATE = [
 export default function Flashcards() {
   const isMobile = useIsMobile();
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
   const dueMode = searchParams.get("mode") === "due";
+  const sessionMode = searchParams.get("session") === "1";
   const autoDueRef = useRef(false); // guards the due-mode auto-start to once
   const [dark, setDark] = useState(false);
   const [phase, setPhase] = useState("setup"); // setup | review | done
@@ -394,7 +398,9 @@ export default function Flashcards() {
 
   /* ============ RENDER ============ */
   return (
-    <div style={{ fontFamily:font, color:t.text, minHeight:"100vh", background:t.bg, transition:"background .25s" }}>
+    <>
+      {sessionMode && <SessionBar />}
+      <div style={{ fontFamily:font, color:t.text, minHeight:"100vh", background:t.bg, transition:"background .25s", paddingTop: sessionMode ? SESSION_BAR_H : 0 }}>
       {/* top bar */}
       <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"14px 20px", borderBottom:`1px solid ${t.border}` }}>
         <div style={{ display:"flex", alignItems:"center", gap:10 }}>
@@ -569,11 +575,17 @@ export default function Flashcards() {
                 ))}
               </div>
             )}
-            <button onClick={()=>setPhase("setup")} style={{ background:"#2563EB", color:"#fff", border:"none", borderRadius:10, padding:"13px 28px", fontSize:15, fontWeight:700, cursor:"pointer", fontFamily:font }}>Back to home</button>
+            <div style={{ display:"flex", gap:10, justifyContent:"center", flexWrap:"wrap" }}>
+              {sessionMode && (
+                <button onClick={()=>goToNextTask(navigate)} style={{ background:"#16A34A", color:"#fff", border:"none", borderRadius:10, padding:"13px 28px", fontSize:15, fontWeight:700, cursor:"pointer", fontFamily:font }}>Next task →</button>
+              )}
+              <button onClick={()=>setPhase("setup")} style={{ background: sessionMode ? "transparent" : "#2563EB", color: sessionMode ? t.text : "#fff", border: sessionMode ? `1px solid ${t.border}` : "none", borderRadius:10, padding:"13px 28px", fontSize:15, fontWeight:700, cursor:"pointer", fontFamily:font }}>Back to home</button>
+            </div>
           </div>
         )}
       </div>
     </div>
+    </>
   );
 }
 

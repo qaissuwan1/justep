@@ -4,6 +4,8 @@ import { supabase } from "../lib/supabase";
 import { colors, font } from "../theme";
 import useIsMobile from "../lib/useIsMobile";
 import Skeleton, { ErrorState } from "../components/Skeleton";
+import SessionBar, { SESSION_BAR_H } from "../components/SessionBar";
+import { goToNextTask } from "../lib/session";
 
 /* ------------------------------------------------------------------ */
 /*  Library — 3-column browser: System → Subject → Topic (lecture)    */
@@ -15,6 +17,7 @@ export default function Subjects() {
   const isMobile = useIsMobile();
   const [searchParams] = useSearchParams();
   const lectureParam = searchParams.get("lecture");
+  const sessionMode = searchParams.get("session") === "1";
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
@@ -190,7 +193,9 @@ export default function Subjects() {
   }
 
   return (
-    <div style={{ fontFamily: font, color: colors.text }}>
+    <>
+      {sessionMode && <SessionBar />}
+      <div style={{ fontFamily: font, color: colors.text, paddingTop: sessionMode ? SESSION_BAR_H : 0 }}>
       <h1 style={{ fontSize: 24, margin: "0 0 4px" }}>Library</h1>
       <p style={{ color: colors.textSoft, margin: "0 0 20px", fontSize: 14 }}>
         Browse questions and active recall by system, subject, and topic.
@@ -342,6 +347,15 @@ export default function Subjects() {
       </div>
       )}
     </div>
+      {sessionMode && (
+        <button
+          onClick={() => goToNextTask(navigate)}
+          style={{ position: "fixed", right: 20, bottom: 20, zIndex: 4000, background: "#16A34A", color: "#fff", border: "none", borderRadius: 999, padding: "13px 22px", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: font, boxShadow: "0 6px 20px rgba(0,0,0,0.18)" }}
+        >
+          Next task →
+        </button>
+      )}
+    </>
   );
 }
 
