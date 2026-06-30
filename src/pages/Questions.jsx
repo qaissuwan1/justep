@@ -447,6 +447,8 @@ export default function Questions() {
       <Setup
         loadingMeta={loadingMeta}
         noIncorrect={noIncorrect}
+        sessionMode={sessionMode}
+        onNextTask={() => goToNextTask(navigate)}
         systems={systems}
         subjects={subjects}
         lectures={lectures}
@@ -833,7 +835,7 @@ function ResultCell({ label, value, color, big, last }) {
 /* ================================================================== */
 function Setup(props) {
   const {
-    loadingMeta, noIncorrect, systems, subjects, lectures, userQ, marks,
+    loadingMeta, noIncorrect, sessionMode, onNextTask, systems, subjects, lectures, userQ, marks,
     pickedSystems, setPickedSystems,
     pickedSubjects, setPickedSubjects,
     pickedLectures, setPickedLectures,
@@ -938,9 +940,13 @@ function Setup(props) {
         <p style={{ color: MUTED, margin: "0 0 28px", fontSize: 14 }}>Build a custom question block.</p>
 
         {noIncorrect && (
-          <div style={{ background: GREEN_SOFT, border: `1px solid ${GREEN}`, color: "#166534", borderRadius: 10, padding: "12px 14px", marginBottom: 24, fontSize: 14, fontWeight: 600 }}>
+          <div style={{ background: GREEN_SOFT, border: `1px solid ${GREEN}`, color: "#166534", borderRadius: 10, padding: "12px 14px", marginBottom: 16, fontSize: 14, fontWeight: 600 }}>
             No incorrect questions to review — great job!
           </div>
+        )}
+        {/* Session must never dead-end: empty incorrect pool still offers "Next task". */}
+        {noIncorrect && sessionMode && (
+          <button onClick={onNextTask} style={{ ...primaryBtn, background: GREEN, marginBottom: 24 }}>Next task →</button>
         )}
 
         {loadingMeta ? (
@@ -1035,6 +1041,10 @@ function Setup(props) {
           >
             {starting ? "Generating…" : `Generate test${N > 0 ? ` · ${take}` : ""}`}
           </button>
+          {/* No dead ends in a session: if there's nothing to generate, allow advancing. */}
+          {sessionMode && N === 0 && !noIncorrect && (
+            <button onClick={onNextTask} style={{ ...primaryBtn, padding: "12px 30px", background: GREEN }}>Next task →</button>
+          )}
         </div>
       )}
     </div>
