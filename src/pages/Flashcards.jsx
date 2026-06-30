@@ -1,4 +1,5 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import { useSearchParams } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { font } from "../theme";
 import useIsMobile from "../lib/useIsMobile";
@@ -85,6 +86,9 @@ const RATE = [
 
 export default function Flashcards() {
   const isMobile = useIsMobile();
+  const [searchParams] = useSearchParams();
+  const dueMode = searchParams.get("mode") === "due";
+  const autoDueRef = useRef(false); // guards the due-mode auto-start to once
   const [dark, setDark] = useState(false);
   const [phase, setPhase] = useState("setup"); // setup | review | done
   const [loading, setLoading] = useState(true);
@@ -172,6 +176,31 @@ export default function Flashcards() {
   }, [reloadKey]);
 
   const retry = () => setReloadKey((k) => k + 1);
+
+  /* ---- deep-link: auto-start "due" review across every deck ----
+     /app/flashcards?mode=due — after the initial load, pull every non-deleted
+     card + the user's progress and run them through buildAndStart (which
+     due-filters + sorts). Skips deck selection. Nothing due → lands on "done". */
+  useEffect(() => {
+    if (!dueMode || autoDueRef.current) return;
+    if (loading || error || !userId || phase !== "setup") return;
+    autoDueRef.current = true;
+    (async () => {
+      setLoading(true);
+      setError(false);
+      try {
+        const [cardsRes, progRes] = await Promise.all([
+          supabase.from("flashcards").select("id,front,back").is("deleted_at", null),
+          supabase.from("flashcard_progress").select("*").eq("user_id", userId),
+        ]);
+        if (cardsRes.error || progRes.error) throw cardsRes.error || progRes.error;
+        buildAndStart(cardsRes.data, progRes.data, null, "Due cards");
+      } catch {
+        setError(true);
+        setLoading(false);
+      }
+    })();
+  }, [dueMode, loading, error, userId, phase]);
 
   /* derived lists */
   const subjects = allSubjects.filter(s => s.system_id === sysId);

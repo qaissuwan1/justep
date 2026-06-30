@@ -72,11 +72,18 @@ function ringColor(score) {
   return "#2B7FFF"; // on track
 }
 
-// Route a queue task to the right page.
-function routeFor(type) {
-  if (type === "FLASHCARD_DUE") return "/app/flashcards";
-  if (type === "LECTURE_UNFINISHED") return "/app/subjects";
-  return "/app/questions";
+// Route a queue task to the right deep-linked page.
+function routeFor(item) {
+  switch (item?.item_type) {
+    case "WRONG_QUESTION":
+      return "/app/questions?mode=incorrect";
+    case "FLASHCARD_DUE":
+      return "/app/flashcards?mode=due";
+    case "LECTURE_UNFINISHED":
+      return item.ref_id ? `/app/subjects?lecture=${item.ref_id}` : "/app/subjects";
+    default:
+      return "/app/questions"; // RECOMMENDED → normal setup
+  }
 }
 
 export default function StudyDashboard() {
@@ -156,7 +163,7 @@ export default function StudyDashboard() {
   const startSession = () => {
     const queue = data?.queue || [];
     const firstOpen = queue.find((_, i) => !done.has(i)) || queue[0];
-    navigate(firstOpen ? routeFor(firstOpen.item_type) : "/app/questions");
+    navigate(firstOpen ? routeFor(firstOpen) : "/app/questions");
   };
 
   if (loading) return <LoadingView isMobile={isMobile} />;
@@ -238,7 +245,7 @@ export default function StudyDashboard() {
                     )}
                   </button>
                   <div style={{ width: 7, height: 7, borderRadius: "50%", marginTop: 6, flexShrink: 0, background: sev.dot }} />
-                  <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ flex: 1, minWidth: 0, cursor: "pointer" }} onClick={() => navigate(routeFor(row))}>
                     <div style={{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap" }}>
                       <span style={{ fontSize: 14, fontWeight: 500, letterSpacing: "-0.01em", color: isDone ? "#B2B2B8" : "#22222A", textDecoration: isDone ? "line-through" : "none" }}>{row.title}</span>
                       <span style={{ fontSize: 10.5, fontWeight: 600, letterSpacing: "0.03em", textTransform: "uppercase", padding: "2px 7px", borderRadius: 5, background: sev.pillBg, color: sev.pillColor }}>{sev.label}</span>

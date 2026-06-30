@@ -1,5 +1,5 @@
-import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useState, useEffect, useRef } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { colors, font } from "../theme";
 import useIsMobile from "../lib/useIsMobile";
@@ -13,6 +13,8 @@ import Skeleton, { ErrorState } from "../components/Skeleton";
 export default function Subjects() {
   const navigate = useNavigate();
   const isMobile = useIsMobile();
+  const [searchParams] = useSearchParams();
+  const lectureParam = searchParams.get("lecture");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
@@ -28,6 +30,7 @@ export default function Subjects() {
 
   const [selSys, setSelSys] = useState(null);
   const [selSub, setSelSub] = useState(null);
+  const [highlightLec, setHighlightLec] = useState(null); // deep-linked lecture to glow
 
   const [userId, setUserId] = useState(null);
   const [lecProgress, setLecProgress] = useState({}); // lecture_id -> { status, started_at, completed_at }
@@ -90,6 +93,16 @@ export default function Subjects() {
         setSubMeta(sm);
         setSysMeta(sysm);
         setLecProgress(lp);
+
+        // Deep-link: ?lecture=<id> — drill the columns to it and flag for highlight.
+        if (lectureParam) {
+          const lec = (lecs || []).find((l) => l.id === lectureParam);
+          const sub = lec ? (subs || []).find((s) => s.id === lec.subject_id) : null;
+          const system = sub ? (sys || []).find((y) => y.id === sub.system_id) : null;
+          if (system) setSelSys(system);
+          if (sub) setSelSub(sub);
+          if (lec) setHighlightLec(lec.id);
+        }
       } catch {
         if (!cancelled) setError(true);
       } finally {
@@ -99,7 +112,7 @@ export default function Subjects() {
     return () => {
       cancelled = true;
     };
-  }, [reloadKey]);
+  }, [reloadKey, lectureParam]);
 
   const retry = () => setReloadKey((k) => k + 1);
 
@@ -249,6 +262,7 @@ export default function Subjects() {
                       prog={lecProgress[l.id]}
                       onOpenNav={openAndGo}
                       onComplete={markComplete}
+                      highlight={l.id === highlightLec}
                     />
                   ))}
                 </div>
@@ -319,6 +333,7 @@ export default function Subjects() {
                   prog={lecProgress[l.id]}
                   onOpenNav={openAndGo}
                   onComplete={markComplete}
+                  highlight={l.id === highlightLec}
                 />
               ))}
             </div>
@@ -330,11 +345,19 @@ export default function Subjects() {
   );
 }
 
-function LectureCard({ l, m, prog, onOpenNav, onComplete }) {
+function LectureCard({ l, m, prog, onOpenNav, onComplete, highlight }) {
   const status = prog?.status || "not_started";
   const open = (path) => onOpenNav(l.id, path);
+  const cardRef = useRef(null);
+  const [glow, setGlow] = useState(!!highlight);
+  useEffect(() => {
+    if (!highlight) return;
+    cardRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    const tmr = setTimeout(() => setGlow(false), 2000); // accent border fades after 2s
+    return () => clearTimeout(tmr);
+  }, [highlight]);
   return (
-    <div style={topicCard}>
+    <div ref={cardRef} style={{ ...topicCard, transition: "box-shadow .4s ease, border-color .4s ease", ...(glow ? { borderColor: colors.blue, boxShadow: `0 0 0 3px ${colors.blue}33` } : {}) }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
         <div style={{ fontWeight: 600, fontSize: 14, flex: 1, minWidth: 0 }}>{l.title}</div>
         <StatusPill status={status} />

@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { useSearchParams } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import useIsMobile from "../lib/useIsMobile";
 
@@ -49,6 +50,8 @@ const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 
 export default function Questions() {
   const isMobile = useIsMobile();
+  const [searchParams] = useSearchParams();
+  const incorrectMode = searchParams.get("mode") === "incorrect";
   const [phase, setPhase] = useState("setup"); // setup | running | summary
 
   /* -------- shared data -------- */
@@ -63,11 +66,17 @@ export default function Questions() {
   const [pickedSystems, setPickedSystems] = useState([]);
   const [pickedSubjects, setPickedSubjects] = useState([]);
   const [pickedLectures, setPickedLectures] = useState([]);
-  const [status, setStatus] = useState({ unused: true, incorrect: false, correct: false, marked: false, omitted: false });
+  const [status, setStatus] = useState(() =>
+    incorrectMode
+      ? { unused: false, incorrect: true, correct: false, marked: false, omitted: false }
+      : { unused: true, incorrect: false, correct: false, marked: false, omitted: false }
+  );
   const [numQuestions, setNumQuestions] = useState("40"); // raw string; clamped on blur/generate
   const [mode, setMode] = useState("tutor"); // tutor | timed
   const [starting, setStarting] = useState(false);
   const [setupError, setSetupError] = useState("");
+  const [noIncorrect, setNoIncorrect] = useState(false); // incorrect-mode deep-link: empty pool
+  const [bannerDismissed, setBannerDismissed] = useState(false);
 
   /* -------- running state -------- */
   const [questions, setQuestions] = useState([]);
@@ -95,6 +104,7 @@ export default function Questions() {
   const finishRef = useRef(null); // always points at the latest finishBlock
   const qStartRef = useRef(0); // timestamp the current question was shown (for time_spent)
   const persistedRef = useRef(new Set()); // qids already written to user_progress this block
+  const autoStartedRef = useRef(false); // guards the incorrect-mode auto-start to once
   const [elapsed, setElapsed] = useState(0);
 
   /* ---------------- load meta + progress + marks ----------------
@@ -154,6 +164,28 @@ export default function Questions() {
       cancelled = true;
     };
   }, [phase]);
+
+  /* ---------------- deep-link: auto-start "incorrect" review ----------------
+     When arriving via /app/questions?mode=incorrect, the status filter is
+     already incorrect-only (see status init). Once the setup load resolves,
+     build the incorrect pool across all content and jump straight into a block.
+     Empty pool → stay on setup with a friendly message. Runs once. */
+  useEffect(() => {
+    if (!incorrectMode || autoStartedRef.current) return;
+    if (phase !== "setup" || loadingMeta) return;
+    autoStartedRef.current = true;
+    const pool = userQ.filter((q) => q.status === "incorrect").map((q) => q.id);
+    // setState lives inside a callback (not the effect body) so we don't trigger
+    // a synchronous cascading render.
+    (async () => {
+      if (!pool.length) {
+        setNoIncorrect(true);
+        return;
+      }
+      startBlock(pool, numQuestions);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [incorrectMode, phase, loadingMeta, userQ]);
 
   /* ---------------- timer tick (timed) ---------------- */
   useEffect(() => {
@@ -407,6 +439,7 @@ export default function Questions() {
     return (
       <Setup
         loadingMeta={loadingMeta}
+        noIncorrect={noIncorrect}
         systems={systems}
         subjects={subjects}
         lectures={lectures}
@@ -479,6 +512,14 @@ export default function Questions() {
           <span style={{ fontSize: 12, color: "#94A3B8", fontVariantNumeric: "tabular-nums" }}>⏱ {fmtTime(elapsed)}</span>
         )}
       </div>
+
+      {/* DEEP-LINK BANNER (incorrect review) — dismissable */}
+      {incorrectMode && !reviewMode && !bannerDismissed && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, background: AMBER_SOFT, borderBottom: `1px solid ${BORDER}`, color: "#92400E", padding: "8px 16px", fontSize: 13, flexShrink: 0 }}>
+          <span style={{ flex: 1 }}>Reviewing questions you previously missed</span>
+          <button onClick={() => setBannerDismissed(true)} aria-label="Dismiss" style={{ background: "transparent", border: "none", color: "#92400E", cursor: "pointer", fontSize: 18, lineHeight: 1, padding: 0 }}>×</button>
+        </div>
+      )}
 
       {/* MIDDLE — rail + panes */}
       <div style={{ flex: 1, display: "flex", flexDirection: isMobile ? "column" : "row", minHeight: 0 }}>
@@ -773,7 +814,7 @@ function ResultCell({ label, value, color, big, last }) {
 /* ================================================================== */
 function Setup(props) {
   const {
-    loadingMeta, systems, subjects, lectures, userQ, marks,
+    loadingMeta, noIncorrect, systems, subjects, lectures, userQ, marks,
     pickedSystems, setPickedSystems,
     pickedSubjects, setPickedSubjects,
     pickedLectures, setPickedLectures,
@@ -876,6 +917,12 @@ function Setup(props) {
       <div style={{ maxWidth: 920, margin: "0 auto", padding: isMobile ? "20px 14px 120px" : "32px 20px 110px" }}>
         <h1 style={{ fontSize: 26, margin: "0 0 4px" }}>Create Test</h1>
         <p style={{ color: MUTED, margin: "0 0 28px", fontSize: 14 }}>Build a custom question block.</p>
+
+        {noIncorrect && (
+          <div style={{ background: GREEN_SOFT, border: `1px solid ${GREEN}`, color: "#166534", borderRadius: 10, padding: "12px 14px", marginBottom: 24, fontSize: 14, fontWeight: 600 }}>
+            No incorrect questions to review — great job!
+          </div>
+        )}
 
         {loadingMeta ? (
           <p style={{ color: MUTED }}>Loading…</p>
