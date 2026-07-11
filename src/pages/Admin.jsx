@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { colors, gradients, font } from "../theme";
 import { Card, Pill, ProgressBar, PrimaryButton, StatCard } from "../components/ui";
@@ -140,6 +140,22 @@ function GhostButton({ children, onClick, color = colors.textSoft }) {
   );
 }
 
+// Phase 3 — reveal soft-deleted container rows so they can be restored.
+function ShowDeletedToggle({ on, onToggle }) {
+  return (
+    <button onClick={onToggle} style={{ display: "inline-flex", alignItems: "center", gap: 8, background: "transparent", border: `1px solid ${colors.line}`, borderRadius: 8, padding: "7px 12px", cursor: "pointer", fontFamily: font, fontSize: 13, color: on ? colors.blue : colors.textSoft }}>
+      <span style={{ width: 16, height: 16, borderRadius: 4, border: `1.5px solid ${on ? colors.blue : "#CBD5E1"}`, background: on ? colors.blue : "#fff", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 800 }}>{on ? "✓" : ""}</span>
+      Show deleted
+    </button>
+  );
+}
+
+function DeletedPill() {
+  return <span style={{ fontSize: 11, fontWeight: 600, color: colors.red, background: "#FEF2F2", borderRadius: 999, padding: "2px 8px", whiteSpace: "nowrap" }}>Deleted</span>;
+}
+
+const restoreBtn = { ...iconBtn, color: colors.green, borderColor: "#BBF7D0" };
+
 // ── data hooks ───────────────────────────────────────────────────────────────
 function useSubjects() {
   const [subjects, setSubjects] = useState([]);
@@ -148,6 +164,7 @@ function useSubjects() {
     supabase
       .from("subjects")
       .select("*")
+      .is("deleted_at", null)
       .order("name")
       .then(({ data }) => active && setSubjects(data || []));
     return () => {
@@ -780,32 +797,50 @@ function ManageSubjects() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
   const [editing, setEditing] = useState(null);
+  const [showDeleted, setShowDeleted] = useState(false);
 
-  const load = async () => {
-    const { data, error } = await supabase.from("subjects").select("*").order("name");
+  const load = useCallback(async () => {
+    let q = supabase.from("subjects").select("*").order("name");
+    if (!showDeleted) q = q.is("deleted_at", null);
+    const { data, error } = await q;
     if (error) setErr(error.message);
     else {
       setErr("");
       setRows(data || []);
     }
     setLoading(false);
-  };
+  }, [showDeleted]);
   useEffect(() => {
     (async () => {
       await load();
     })();
-  }, []);
+  }, [load]);
 
   const remove = async (id) => {
-    if (!window.confirm("Delete this subject? Its questions and flashcards will also be removed.")) return;
-    const { error } = await supabase.from("subjects").delete().eq("id", id);
+    if (!window.confirm("This item will be hidden from students but can be restored later.")) return;
+    const { error } = await supabase.from("subjects").update({ deleted_at: new Date().toISOString() }).eq("id", id);
     if (error) setErr(error.message);
-    else setRows((r) => r.filter((x) => x.id !== id));
+    else load();
+  };
+
+  const restore = async (id) => {
+    const { error } = await supabase.from("subjects").update({ deleted_at: null }).eq("id", id);
+    if (error) setErr(error.message);
+    else load();
   };
 
   return (
     <>
-      <AdminHeader title="Manage Subjects" subtitle={`${rows.length} subject${rows.length === 1 ? "" : "s"}`} right={<PrimaryButton onClick={() => setEditing({})}>+ Add subject</PrimaryButton>} />
+      <AdminHeader
+        title="Manage Subjects"
+        subtitle={`${rows.length} subject${rows.length === 1 ? "" : "s"}`}
+        right={
+          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+            <ShowDeletedToggle on={showDeleted} onToggle={() => setShowDeleted((v) => !v)} />
+            <PrimaryButton onClick={() => setEditing({})}>+ Add subject</PrimaryButton>
+          </div>
+        }
+      />
       {err && <Banner>{err}</Banner>}
 
       {loading ? (
@@ -817,20 +852,29 @@ function ManageSubjects() {
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 16 }}>
           {rows.map((s) => (
-            <Card key={s.id}>
+            <Card key={s.id} style={s.deleted_at ? { opacity: 0.6 } : undefined}>
               <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
                 <div style={{ width: 44, height: 44, borderRadius: 11, background: `${s.color || colors.blue}1a`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, fontWeight: 800, color: s.color || colors.blue }}>
                   {s.icon || s.name?.[0] || "?"}
                 </div>
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 15, fontWeight: 700 }}>{s.name}</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <div style={{ fontSize: 15, fontWeight: 700 }}>{s.name}</div>
+                    {s.deleted_at && <DeletedPill />}
+                  </div>
                   <div style={{ fontSize: 12, color: colors.textMuted }}>{s.color}</div>
                 </div>
               </div>
               {s.description && <div style={{ fontSize: 13, color: colors.textSoft, marginBottom: 14, lineHeight: 1.5 }}>{s.description}</div>}
               <div style={{ display: "flex", gap: 8 }}>
-                <button onClick={() => setEditing(s)} style={{ ...iconBtn, flex: 1 }}>Edit</button>
-                <button onClick={() => remove(s.id)} style={{ ...iconBtn, flex: 1, color: colors.red, borderColor: "#FECACA" }}>Delete</button>
+                {s.deleted_at ? (
+                  <button onClick={() => restore(s.id)} style={{ ...restoreBtn, flex: 1 }}>Restore</button>
+                ) : (
+                  <>
+                    <button onClick={() => setEditing(s)} style={{ ...iconBtn, flex: 1 }}>Edit</button>
+                    <button onClick={() => remove(s.id)} style={{ ...iconBtn, flex: 1, color: colors.red, borderColor: "#FECACA" }}>Delete</button>
+                  </>
+                )}
               </div>
             </Card>
           ))}
@@ -922,6 +966,7 @@ function ManageTopics() {
   const [err, setErr] = useState("");
   const [fSubject, setFSubject] = useState("all");
   const [editing, setEditing] = useState(null);
+  const [showDeleted, setShowDeleted] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const bump = () => setReloadKey((k) => k + 1);
 
@@ -930,7 +975,9 @@ function ManageTopics() {
     (async () => {
       setLoading(true);
       const [tp, q, f] = await Promise.all([
-        supabase.from("topics").select("*, subjects(name)").order("subject_id").order("order_index"),
+        showDeleted
+          ? supabase.from("topics").select("*, subjects(name)").order("subject_id").order("order_index")
+          : supabase.from("topics").select("*, subjects(name)").is("deleted_at", null).order("subject_id").order("order_index"),
         supabase.from("questions").select("topic_id").is("deleted_at", null),
         supabase.from("flashcards").select("topic_id").is("deleted_at", null),
       ]);
@@ -954,7 +1001,7 @@ function ManageTopics() {
     return () => {
       active = false;
     };
-  }, [reloadKey]);
+  }, [reloadKey, showDeleted]);
 
   const filtered = useMemo(
     () => rows.filter((r) => fSubject === "all" || r.subject_id === fSubject),
@@ -968,12 +1015,18 @@ function ManageTopics() {
   const remove = async (row) => {
     const qc = qCount[row.id] || 0;
     const fc = fCount[row.id] || 0;
-    if (qc > 0 || fc > 0) {
-      setErr(`Cannot delete topic with content. "${row.name}" has ${qc} question${qc === 1 ? "" : "s"} and ${fc} flashcard${fc === 1 ? "" : "s"}. Reassign or remove them first.`);
-      return;
-    }
-    if (!window.confirm(`Delete topic "${row.name}"? This cannot be undone.`)) return;
-    const { error } = await supabase.from("topics").delete().eq("id", row.id);
+    const msg =
+      qc > 0 || fc > 0
+        ? `This topic has ${qc} question${qc === 1 ? "" : "s"} and ${fc} flashcard${fc === 1 ? "" : "s"}. They will be hidden along with the topic. Continue?`
+        : "This item will be hidden from students but can be restored later.";
+    if (!window.confirm(msg)) return;
+    const { error } = await supabase.from("topics").update({ deleted_at: new Date().toISOString() }).eq("id", row.id);
+    if (error) setErr(error.message);
+    else { setErr(""); bump(); }
+  };
+
+  const restore = async (row) => {
+    const { error } = await supabase.from("topics").update({ deleted_at: null }).eq("id", row.id);
     if (error) setErr(error.message);
     else { setErr(""); bump(); }
   };
@@ -986,12 +1039,15 @@ function ManageTopics() {
         title="Manage Topics"
         subtitle={`${rows.length} topic${rows.length === 1 ? "" : "s"}`}
         right={
-          <PrimaryButton
-            onClick={() => setEditing({ subject_id: addSubject })}
-            style={subjects.length ? undefined : { opacity: 0.5, pointerEvents: "none" }}
-          >
-            + Add topic
-          </PrimaryButton>
+          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+            <ShowDeletedToggle on={showDeleted} onToggle={() => setShowDeleted((v) => !v)} />
+            <PrimaryButton
+              onClick={() => setEditing({ subject_id: addSubject })}
+              style={subjects.length ? undefined : { opacity: 0.5, pointerEvents: "none" }}
+            >
+              + Add topic
+            </PrimaryButton>
+          </div>
         }
       />
       {err && <Banner>{err}</Banner>}
@@ -1027,17 +1083,25 @@ function ManageTopics() {
               </thead>
               <tbody>
                 {filtered.map((t) => (
-                  <tr key={t.id}>
+                  <tr key={t.id} style={t.deleted_at ? { opacity: 0.55 } : undefined}>
                     <td style={td}><span style={{ fontWeight: 700, color: colors.textMuted }}>{t.order_index}</span></td>
-                    <td style={{ ...td, fontWeight: 600 }}>{t.name}</td>
+                    <td style={{ ...td, fontWeight: 600 }}>
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>{t.name}{t.deleted_at && <DeletedPill />}</span>
+                    </td>
                     <td style={td}>
                       <Pill color={colors.blue} bg={`${colors.blue}1a`}>{t.subjects?.name || "—"}</Pill>
                     </td>
                     <td style={td}>{qCount[t.id] || 0}</td>
                     <td style={td}>{fCount[t.id] || 0}</td>
                     <td style={{ ...td, textAlign: "right", whiteSpace: "nowrap" }}>
-                      <button onClick={() => setEditing(t)} style={{ ...iconBtn, marginRight: 6 }}>Edit</button>
-                      <button onClick={() => remove(t)} style={{ ...iconBtn, color: colors.red, borderColor: "#FECACA" }}>Delete</button>
+                      {t.deleted_at ? (
+                        <button onClick={() => restore(t)} style={restoreBtn}>Restore</button>
+                      ) : (
+                        <>
+                          <button onClick={() => setEditing(t)} style={{ ...iconBtn, marginRight: 6 }}>Edit</button>
+                          <button onClick={() => remove(t)} style={{ ...iconBtn, color: colors.red, borderColor: "#FECACA" }}>Delete</button>
+                        </>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -1144,6 +1208,7 @@ function ManageLectures() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
   const [editing, setEditing] = useState(null);
+  const [showDeleted, setShowDeleted] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const bump = () => setReloadKey((k) => k + 1);
 
@@ -1156,7 +1221,9 @@ function ManageLectures() {
     (async () => {
       setLoading(true);
       const [lec, q, f] = await Promise.all([
-        supabase.from("lectures").select("*").eq("subject_id", activeSubject).order("order_index").order("title"),
+        showDeleted
+          ? supabase.from("lectures").select("*").eq("subject_id", activeSubject).order("order_index").order("title")
+          : supabase.from("lectures").select("*").eq("subject_id", activeSubject).is("deleted_at", null).order("order_index").order("title"),
         supabase.from("questions").select("lecture_id").eq("subject_id", activeSubject).is("deleted_at", null),
         supabase.from("flashcards").select("lecture_id").eq("subject_id", activeSubject).is("deleted_at", null),
       ]);
@@ -1180,11 +1247,17 @@ function ManageLectures() {
     return () => {
       active = false;
     };
-  }, [activeSubject, reloadKey]);
+  }, [activeSubject, reloadKey, showDeleted]);
 
   const remove = async (id) => {
-    if (!window.confirm("Delete this lecture? Its questions and flashcards are kept but become unassigned.")) return;
-    const { error } = await supabase.from("lectures").delete().eq("id", id);
+    if (!window.confirm("This item will be hidden from students but can be restored later.")) return;
+    const { error } = await supabase.from("lectures").update({ deleted_at: new Date().toISOString() }).eq("id", id);
+    if (error) setErr(error.message);
+    else bump();
+  };
+
+  const restore = async (id) => {
+    const { error } = await supabase.from("lectures").update({ deleted_at: null }).eq("id", id);
     if (error) setErr(error.message);
     else bump();
   };
@@ -1213,9 +1286,12 @@ function ManageLectures() {
         title="Manage Lectures"
         subtitle="Organize each subject's content into lectures"
         right={
-          <PrimaryButton onClick={() => setEditing({})} style={activeSubject ? undefined : { opacity: 0.5, pointerEvents: "none" }}>
-            + Add lecture
-          </PrimaryButton>
+          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+            <ShowDeletedToggle on={showDeleted} onToggle={() => setShowDeleted((v) => !v)} />
+            <PrimaryButton onClick={() => setEditing({})} style={activeSubject ? undefined : { opacity: 0.5, pointerEvents: "none" }}>
+              + Add lecture
+            </PrimaryButton>
+          </div>
         }
       />
       {err && <Banner>{err}</Banner>}
@@ -1250,25 +1326,36 @@ function ManageLectures() {
               </thead>
               <tbody>
                 {rows.map((l, i) => (
-                  <tr key={l.id}>
+                  <tr key={l.id} style={l.deleted_at ? { opacity: 0.55 } : undefined}>
                     <td style={td}>
                       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                         <span style={{ fontWeight: 700, color: colors.textMuted, width: 18 }}>{i + 1}</span>
-                        <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                          <button onClick={() => move(i, -1)} disabled={i === 0} style={{ ...iconBtn, padding: "0 6px", lineHeight: 1.3, opacity: i === 0 ? 0.4 : 1 }}>▲</button>
-                          <button onClick={() => move(i, 1)} disabled={i === rows.length - 1} style={{ ...iconBtn, padding: "0 6px", lineHeight: 1.3, opacity: i === rows.length - 1 ? 0.4 : 1 }}>▼</button>
-                        </div>
+                        {!showDeleted && (
+                          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                            <button onClick={() => move(i, -1)} disabled={i === 0} style={{ ...iconBtn, padding: "0 6px", lineHeight: 1.3, opacity: i === 0 ? 0.4 : 1 }}>▲</button>
+                            <button onClick={() => move(i, 1)} disabled={i === rows.length - 1} style={{ ...iconBtn, padding: "0 6px", lineHeight: 1.3, opacity: i === rows.length - 1 ? 0.4 : 1 }}>▼</button>
+                          </div>
+                        )}
                       </div>
                     </td>
                     <td style={{ ...td, maxWidth: 420 }}>
-                      <div style={{ fontWeight: 600, marginBottom: 2 }}>{l.title}</div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2 }}>
+                        <span style={{ fontWeight: 600 }}>{l.title}</span>
+                        {l.deleted_at && <DeletedPill />}
+                      </div>
                       {l.description && <div style={{ fontSize: 12, color: colors.textMuted, lineHeight: 1.4 }}>{l.description}</div>}
                     </td>
                     <td style={td}>{qCount[l.id] || 0}</td>
                     <td style={td}>{fCount[l.id] || 0}</td>
                     <td style={{ ...td, textAlign: "right", whiteSpace: "nowrap" }}>
-                      <button onClick={() => setEditing(l)} style={{ ...iconBtn, marginRight: 6 }}>Edit</button>
-                      <button onClick={() => remove(l.id)} style={{ ...iconBtn, color: colors.red, borderColor: "#FECACA" }}>Delete</button>
+                      {l.deleted_at ? (
+                        <button onClick={() => restore(l.id)} style={restoreBtn}>Restore</button>
+                      ) : (
+                        <>
+                          <button onClick={() => setEditing(l)} style={{ ...iconBtn, marginRight: 6 }}>Edit</button>
+                          <button onClick={() => remove(l.id)} style={{ ...iconBtn, color: colors.red, borderColor: "#FECACA" }}>Delete</button>
+                        </>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -1298,6 +1385,47 @@ function ManageLectures() {
 // ════════════════════════════════════════════════════════════════════════════
 // MANAGE SYSTEMS
 // ════════════════════════════════════════════════════════════════════════════
+function SystemForm({ initial, onClose, onSaved }) {
+  const [s, setS] = useState({ name: initial?.name || "", color: initial?.color || SUBJECT_COLORS[0] });
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
+
+  const save = async () => {
+    setErr("");
+    if (!s.name.trim()) return setErr("System name is required.");
+    setSaving(true);
+    const { error } = await supabase.from("systems").update({ name: s.name.trim(), color: s.color }).eq("id", initial.id);
+    setSaving(false);
+    if (error) return setErr(error.message);
+    onSaved();
+  };
+
+  return (
+    <Modal
+      title="Edit system"
+      onClose={onClose}
+      footer={
+        <>
+          <GhostButton onClick={onClose}>Cancel</GhostButton>
+          <PrimaryButton onClick={save} style={{ opacity: saving ? 0.7 : 1, pointerEvents: saving ? "none" : "auto" }}>{saving ? "Saving…" : "Save"}</PrimaryButton>
+        </>
+      }
+    >
+      {err && <Banner>{err}</Banner>}
+      <div style={{ marginBottom: 14 }}>
+        <FieldLabel>Name</FieldLabel>
+        <input value={s.name} onChange={(e) => setS({ ...s, name: e.target.value })} placeholder="e.g. Cardiovascular" style={inputStyle} />
+      </div>
+      <FieldLabel>Colour</FieldLabel>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        {SUBJECT_COLORS.map((c) => (
+          <button key={c} onClick={() => setS({ ...s, color: c })} style={{ width: 30, height: 30, borderRadius: 8, background: c, border: s.color === c ? `3px solid ${colors.navy}` : "3px solid transparent", cursor: "pointer" }} />
+        ))}
+      </div>
+    </Modal>
+  );
+}
+
 function ManageSystems() {
   const [systems, setSystems] = useState([]);
   const [subjects, setSubjects] = useState([]);
@@ -1306,11 +1434,16 @@ function ManageSystems() {
   const [name, setName] = useState("");
   const [color, setColor] = useState(SUBJECT_COLORS[0]);
   const [saving, setSaving] = useState(false);
+  const [showDeleted, setShowDeleted] = useState(false);
+  const [editing, setEditing] = useState(null);
 
-  const load = async () => {
+  const load = useCallback(async () => {
+    const sysQuery = showDeleted
+      ? supabase.from("systems").select("*").order("name")
+      : supabase.from("systems").select("*").is("deleted_at", null).order("name");
     const [sys, subs] = await Promise.all([
-      supabase.from("systems").select("*").order("name"),
-      supabase.from("subjects").select("id, name, color, system_id").order("name"),
+      sysQuery,
+      supabase.from("subjects").select("id, name, color, system_id").is("deleted_at", null).order("name"),
     ]);
     if (sys.error) setErr(sys.error.message);
     else {
@@ -1319,12 +1452,12 @@ function ManageSystems() {
       setSubjects(subs.data || []);
     }
     setLoading(false);
-  };
+  }, [showDeleted]);
   useEffect(() => {
     (async () => {
       await load();
     })();
-  }, []);
+  }, [load]);
 
   const addSystem = async () => {
     setErr("");
@@ -1338,8 +1471,14 @@ function ManageSystems() {
   };
 
   const removeSystem = async (id) => {
-    if (!window.confirm("Delete this system? Subjects assigned to it will become unassigned.")) return;
-    const { error } = await supabase.from("systems").delete().eq("id", id);
+    if (!window.confirm("This item will be hidden from students but can be restored later.")) return;
+    const { error } = await supabase.from("systems").update({ deleted_at: new Date().toISOString() }).eq("id", id);
+    if (error) setErr(error.message);
+    else load();
+  };
+
+  const restoreSystem = async (id) => {
+    const { error } = await supabase.from("systems").update({ deleted_at: null }).eq("id", id);
     if (error) setErr(error.message);
     else load();
   };
@@ -1357,7 +1496,11 @@ function ManageSystems() {
 
   return (
     <>
-      <AdminHeader title="Manage Systems" subtitle="Group subjects into organ systems / blocks" />
+      <AdminHeader
+        title="Manage Systems"
+        subtitle="Group subjects into organ systems / blocks"
+        right={<ShowDeletedToggle on={showDeleted} onToggle={() => setShowDeleted((v) => !v)} />}
+      />
       {err && <Banner>{err}</Banner>}
 
       {/* Add system */}
@@ -1398,14 +1541,21 @@ function ManageSystems() {
             </thead>
             <tbody>
               {systems.map((s) => (
-                <tr key={s.id}>
+                <tr key={s.id} style={s.deleted_at ? { opacity: 0.55 } : undefined}>
                   <td style={{ ...td, fontWeight: 600 }}>
-                    <span style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>{swatch(s.color)}{s.name}</span>
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>{swatch(s.color)}{s.name}{s.deleted_at && <DeletedPill />}</span>
                   </td>
                   <td style={{ ...td, color: colors.textMuted, fontSize: 12 }}>{s.color}</td>
                   <td style={td}>{subjectCount(s.id)}</td>
-                  <td style={{ ...td, textAlign: "right" }}>
-                    <button onClick={() => removeSystem(s.id)} style={{ ...iconBtn, color: colors.red, borderColor: "#FECACA" }}>Delete</button>
+                  <td style={{ ...td, textAlign: "right", whiteSpace: "nowrap" }}>
+                    {s.deleted_at ? (
+                      <button onClick={() => restoreSystem(s.id)} style={restoreBtn}>Restore</button>
+                    ) : (
+                      <>
+                        <button onClick={() => setEditing(s)} style={{ ...iconBtn, marginRight: 6 }}>Edit</button>
+                        <button onClick={() => removeSystem(s.id)} style={{ ...iconBtn, color: colors.red, borderColor: "#FECACA" }}>Delete</button>
+                      </>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -1438,7 +1588,7 @@ function ManageSystems() {
                   <td style={td}>
                     <select value={s.system_id || ""} onChange={(e) => assignSubject(s.id, e.target.value)} style={{ ...inputStyle, width: 260 }}>
                       <option value="">— Unassigned —</option>
-                      {systems.map((sys) => (
+                      {systems.filter((sys) => !sys.deleted_at).map((sys) => (
                         <option key={sys.id} value={sys.id}>{sys.name}</option>
                       ))}
                     </select>
@@ -1449,6 +1599,8 @@ function ManageSystems() {
           </table>
         )}
       </Card>
+
+      {editing && <SystemForm initial={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} />}
     </>
   );
 }

@@ -15,6 +15,7 @@ export function useTopics(subjectId) {
       .from("topics")
       .select("id, name, order_index")
       .eq("subject_id", subjectId)
+      .is("deleted_at", null)
       .order("order_index", { ascending: true })
       .order("name", { ascending: true })
       .then(({ data }) => active && setTopics(data || []));

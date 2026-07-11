@@ -15,6 +15,7 @@ export function useLectures(subjectId) {
       .from("lectures")
       .select("id, title, order_index")
       .eq("subject_id", subjectId)
+      .is("deleted_at", null)
       .order("order_index", { ascending: true })
       .order("title", { ascending: true })
       .then(({ data }) => active && setLectures(data || []));
