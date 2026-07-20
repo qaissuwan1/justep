@@ -86,6 +86,19 @@ const RATE = [
   { key:"easy",  label:"Easy",  l:{bg:"#DBEAFE",fg:"#1D4ED8"}, d:{bg:"#11293F",fg:"#60A5FA"} },
 ];
 
+const REVIEW_CARD_SELECT = "id,front,back,subject_id,topic_id,lecture_id,lectures(title),topics(name),subjects(name)";
+const NO_LECTURE_PREFIX = "no-lecture:";
+const noLectureKey = (subjectId) => `${NO_LECTURE_PREFIX}${subjectId}`;
+
+function shuffle(items) {
+  const result = [...items];
+  for (let i = result.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [result[i], result[j]] = [result[j], result[i]];
+  }
+  return result;
+}
+
 export default function Flashcards() {
   const isMobile = useIsMobile();
   const [searchParams] = useSearchParams();
@@ -103,16 +116,16 @@ export default function Flashcards() {
   const [systems, setSystems] = useState([]);
   const [allSubjects, setAllSubjects] = useState([]);
   const [allLectures, setAllLectures] = useState([]);
-  const [counts, setCounts] = useState({});
+  const [cardPool, setCardPool] = useState([]);
 
-  // selection — single-deck (default)
-  const [sysId, setSysId] = useState(null);
-  const [subId, setSubId] = useState(null);
-  const [lecId, setLecId] = useState("all");
-  // selection — multi-deck
-  const [multi, setMulti] = useState(false);
-  const [subIds, setSubIds] = useState([]);
-  const [lecIds, setLecIds] = useState([]);
+  // setup selections — empty content arrays mean "all", matching Questions.
+  const [pickedSystems, setPickedSystems] = useState([]);
+  const [pickedSubjects, setPickedSubjects] = useState([]);
+  const [pickedLectures, setPickedLectures] = useState([]);
+  const [status, setStatus] = useState({ due: true, new: false, learning: false, all: false });
+  const [numCards, setNumCards] = useState("40");
+  const [starting, setStarting] = useState(false);
+  const [setupError, setSetupError] = useState("");
 
   // active session context (set when a review starts)
   const [examDate, setExamDate] = useState(null);
@@ -128,9 +141,32 @@ export default function Flashcards() {
   const headColor = dark ? t.text : "#1a2b4a";
   const pillBorder = dark ? "#2B3A55" : "#BFD7F5";
   const selBg = dark ? "#13233b" : "#EFF4FF";
+  const activeCard = queue[idx]?.card;
+  const sourceLabel = activeCard?.lectures?.title || activeCard?.topics?.name || activeCard?.subjects?.name;
+
+  /* ---- due deep-link queue ---- */
+  function buildAndStart(cards, prog, exam, name) {
+    const pm = {}; (prog||[]).forEach((p) => (pm[p.flashcard_id] = p));
+    const now = new Date();
+    const due = (cards || [])
+      .map((c) => ({ card: c, progress: pm[c.id] || null }))
+      .filter(({ progress }) => progress && (!progress.next_review || new Date(progress.next_review) <= now))
+      // Oldest-due first.
+      .sort((a, b) =>
+        (a.progress?.next_review ? new Date(a.progress.next_review).getTime() : 0)
+        - (b.progress?.next_review ? new Date(b.progress.next_review).getTime() : 0)
+      );
+    setExamDate(exam || null);
+    setSessionName(name);
+    setQueue(due); setIdx(0); setRevealed(false);
+    setStats({ again: 0, hard: 0, good: 0, easy: 0 });
+    setLoading(false);
+    setPhase(due.length ? "review" : "done");
+  }
 
   /* ---- initial load ---- */
   useEffect(() => {
+    if (phase !== "setup") return;
     let cancelled = false;
     (async () => {
       setLoading(true);
@@ -142,32 +178,25 @@ export default function Flashcards() {
           supabase.from("systems").select("id,name,color").order("name"),
           supabase.from("subjects").select("id,name,color,exam_date,system_id").order("name"),
           supabase.from("lectures").select("id,title,lecture_date,order_index,subject_id").order("order_index"),
-          supabase.from("flashcards").select("id,subject_id,lecture_id").is("deleted_at", null),
-          supabase.from("flashcard_progress").select("flashcard_id,next_review").eq("user_id", user.id),
+          supabase.from("flashcards").select(REVIEW_CARD_SELECT).is("deleted_at", null),
+          supabase.from("flashcard_progress").select("*").eq("user_id", user.id),
         ]);
         const failed = results.find((r) => r.error);
         if (failed) throw failed.error;
         const [{ data:sys }, { data:subs }, { data:lecs }, { data:cards }, { data:prog }] = results;
         const pm = {}; (prog||[]).forEach(p => pm[p.flashcard_id] = p);
-        const now = new Date();
-        const cnt = {};
-        (cards||[]).forEach(c => {
-          const due = !pm[c.id] || !pm[c.id].next_review || new Date(pm[c.id].next_review) <= now;
-          [c.subject_id, c.lecture_id].filter(Boolean).forEach(id => {
-            if (!cnt[id]) cnt[id] = { due:0, total:0 };
-            cnt[id].total++; if (due) cnt[id].due++;
-          });
-        });
+        const subjectSystems = {}; (subs||[]).forEach((s) => (subjectSystems[s.id] = s.system_id || null));
+        const pool = (cards||[]).map((card) => ({
+          id: card.id,
+          subject_id: card.subject_id,
+          lecture_id: card.lecture_id || null,
+          system_id: subjectSystems[card.subject_id] || null,
+          card,
+          progress: pm[card.id] || null,
+        }));
         if (cancelled) return;
         setUserId(user.id);
-        setSystems(sys||[]); setAllSubjects(subs||[]); setAllLectures(lecs||[]); setCounts(cnt);
-        // preselect first system that has subjects with cards, plus its first subject
-        const firstSys = (sys||[]).find(s => (subs||[]).some(su => su.system_id===s.id && (cnt[su.id]?.total||0)>0)) || (sys||[])[0];
-        if (firstSys) {
-          setSysId(firstSys.id);
-          const firstSub = (subs||[]).find(su => su.system_id === firstSys.id);
-          setSubId(firstSub ? firstSub.id : null);
-        }
+        setSystems(sys||[]); setAllSubjects(subs||[]); setAllLectures(lecs||[]); setCardPool(pool);
       } catch {
         if (!cancelled) setError(true);
       } finally {
@@ -177,7 +206,7 @@ export default function Flashcards() {
     return () => {
       cancelled = true;
     };
-  }, [reloadKey]);
+  }, [reloadKey, phase]);
 
   const retry = () => setReloadKey((k) => k + 1);
 
@@ -194,7 +223,7 @@ export default function Flashcards() {
       setError(false);
       try {
         const [cardsRes, progRes] = await Promise.all([
-          supabase.from("flashcards").select("id,front,back").is("deleted_at", null),
+          supabase.from("flashcards").select(REVIEW_CARD_SELECT).is("deleted_at", null),
           supabase.from("flashcard_progress").select("*").eq("user_id", userId),
         ]);
         if (cardsRes.error || progRes.error) throw cardsRes.error || progRes.error;
@@ -206,129 +235,159 @@ export default function Flashcards() {
     })();
   }, [dueMode, loading, error, userId, phase]);
 
-  /* derived lists */
-  const subjects = allSubjects.filter(s => s.system_id === sysId);
-  const lectures = allLectures.filter(l => l.subject_id === subId); // single mode
-  const lecturesMulti = allLectures.filter(l => subIds.includes(l.subject_id)); // multi mode
-
-  const sysDue = (id) => allSubjects.filter(s => s.system_id === id).reduce((a, s) => a + (counts[s.id]?.due || 0), 0);
-
-  /* ---- selection handlers ---- */
-  const toggleMulti = () => {
-    const next = !multi;
-    setMulti(next);
-    if (next) {
-      setSubIds([]);
-      setLecIds([]);
-    } else {
-      const fs = allSubjects.find((su) => su.system_id === sysId);
-      setSubId(fs ? fs.id : null);
-      setLecId("all");
+  /* ---- configurable setup queue ---- */
+  function startReview(items, n) {
+    setSetupError("");
+    if (!items.length) {
+      setSetupError("No flashcards match your filters.");
+      return;
     }
-  };
-
-  const pickSystem = (s) => {
-    setSysId(s.id);
-    if (multi) {
-      setSubIds([]);
-      setLecIds([]);
-    } else {
-      const fs = allSubjects.find((su) => su.system_id === s.id);
-      setSubId(fs ? fs.id : null);
-      setLecId("all");
-    }
-  };
-
-  const onSubject = (id) => {
-    if (multi) {
-      if (subIds.includes(id)) {
-        const remLec = allLectures.filter((l) => l.subject_id === id).map((l) => l.id);
-        setSubIds(subIds.filter((x) => x !== id));
-        setLecIds(lecIds.filter((x) => !remLec.includes(x)));
-      } else setSubIds([...subIds, id]);
-    } else {
-      setSubId(id);
-      setLecId("all");
-    }
-  };
-
-  const onLecture = (id) => {
-    if (multi) setLecIds(lecIds.includes(id) ? lecIds.filter((x) => x !== id) : [...lecIds, id]);
-    else setLecId(id);
-  };
-
-  const subAllOn = subjects.length > 0 && subIds.length === subjects.length;
-  const lecAllOn = lecturesMulti.length > 0 && lecIds.length === lecturesMulti.length;
-  const subMaster = () => (subAllOn ? (setSubIds([]), setLecIds([])) : setSubIds(subjects.map((s) => s.id)));
-  const lecMaster = () => (lecAllOn ? setLecIds([]) : setLecIds(lecturesMulti.map((l) => l.id)));
-
-  const selDue = () => {
-    if (multi) {
-      let total = 0;
-      subIds.forEach((id) => (total += counts[id]?.due || 0));
-      lecIds.forEach((id) => {
-        const lec = allLectures.find((l) => l.id === id);
-        if (lec && !subIds.includes(lec.subject_id)) total += counts[id]?.due || 0;
-      });
-      return total;
-    }
-    return lecId === "all" ? counts[subId]?.due || 0 : counts[lecId]?.due || 0;
-  };
-
-  const canStart = multi ? subIds.length > 0 || lecIds.length > 0 : !!subId;
-
-  /* ---- start review ---- */
-  function buildAndStart(cards, prog, exam, name) {
-    const pm = {}; (prog||[]).forEach((p) => (pm[p.flashcard_id] = p));
-    const now = new Date();
-    const due = (cards || [])
-      .map((c) => ({ card: c, progress: pm[c.id] || null }))
-      .filter(({ progress }) => !progress || !progress.next_review || new Date(progress.next_review) <= now)
-      // Oldest-due first.
-      .sort((a, b) =>
-        (a.progress?.next_review ? new Date(a.progress.next_review).getTime() : 0)
-        - (b.progress?.next_review ? new Date(b.progress.next_review).getTime() : 0)
-      );
-    setExamDate(exam || null);
+    const parsed = parseInt(n, 10);
+    const take = Math.min(Math.max(1, Number.isNaN(parsed) ? 1 : parsed), items.length);
+    setStarting(true);
+    const chosen = shuffle(items).slice(0, take);
+    const chosenSubjects = new Set(chosen.map((item) => item.subject_id));
+    const exam = allSubjects
+      .filter((subject) => chosenSubjects.has(subject.id) && subject.exam_date)
+      .map((subject) => subject.exam_date)
+      .sort()[0] || null;
+    const activeStatuses = Object.entries(status).filter(([, on]) => on).map(([key]) => key);
+    const name = activeStatuses.length === 1 ? `${activeStatuses[0][0].toUpperCase()}${activeStatuses[0].slice(1)} cards` : "Custom review";
+    setExamDate(exam);
     setSessionName(name);
-    setQueue(due); setIdx(0); setRevealed(false);
+    setQueue(chosen);
+    setIdx(0);
+    setRevealed(false);
     setStats({ again: 0, hard: 0, good: 0, easy: 0 });
-    setLoading(false);
-    setPhase(due.length ? "review" : "done");
+    setStarting(false);
+    setPhase("review");
   }
 
-  async function start() {
-    if (!canStart) return;
-    setLoading(true);
-    setError(false);
-    try {
-      if (multi) {
-        let query = supabase.from("flashcards").select("id,front,back").is("deleted_at", null);
-        if (subIds.length && lecIds.length) query = query.or(`subject_id.in.(${subIds.join(",")}),lecture_id.in.(${lecIds.join(",")})`);
-        else if (subIds.length) query = query.in("subject_id", subIds);
-        else query = query.in("lecture_id", lecIds);
-        const [cardsRes, progRes] = await Promise.all([query, supabase.from("flashcard_progress").select("*").eq("user_id", userId)]);
-        if (cardsRes.error || progRes.error) throw cardsRes.error || progRes.error;
-        const exam = allSubjects.filter((s) => subIds.includes(s.id) && s.exam_date).map((s) => s.exam_date).sort()[0] || null;
-        const parts = [];
-        if (subIds.length) parts.push(`${subIds.length} subject${subIds.length === 1 ? "" : "s"}`);
-        if (lecIds.length) parts.push(`${lecIds.length} lecture${lecIds.length === 1 ? "" : "s"}`);
-        buildAndStart(cardsRes.data, progRes.data, exam, `Multi-deck · ${parts.join(" · ")}`);
-      } else {
-        const q = lecId === "all"
-          ? supabase.from("flashcards").select("id,front,back").eq("subject_id", subId).is("deleted_at", null)
-          : supabase.from("flashcards").select("id,front,back").eq("lecture_id", lecId).is("deleted_at", null);
-        const [cardsRes, progRes] = await Promise.all([q, supabase.from("flashcard_progress").select("*").eq("user_id", userId)]);
-        if (cardsRes.error || progRes.error) throw cardsRes.error || progRes.error;
-        const subj = allSubjects.find((s) => s.id === subId);
-        const name = lecId === "all" ? subj?.name : allLectures.find((l) => l.id === lecId)?.title;
-        buildAndStart(cardsRes.data, progRes.data, subj?.exam_date, name || "Review");
-      }
-    } catch {
-      setError(true);
-      setLoading(false);
+  /* ---- unified setup cascade ---- */
+  const toggleStatus = (key) => setStatus((current) => ({ ...current, [key]: !current[key] }));
+
+  const toggleSystem = (id) => {
+    if (pickedSystems.includes(id)) {
+      const removedSubjects = allSubjects.filter((subject) => subject.system_id === id).map((subject) => subject.id);
+      const removedLectures = new Set([
+        ...allLectures.filter((lecture) => removedSubjects.includes(lecture.subject_id)).map((lecture) => lecture.id),
+        ...removedSubjects.map(noLectureKey),
+      ]);
+      setPickedSystems(pickedSystems.filter((systemId) => systemId !== id));
+      setPickedSubjects(pickedSubjects.filter((subjectId) => !removedSubjects.includes(subjectId)));
+      setPickedLectures(pickedLectures.filter((lectureId) => !removedLectures.has(lectureId)));
+    } else {
+      setPickedSystems([...pickedSystems, id]);
     }
-  }
+  };
+
+  const toggleSubject = (id) => {
+    if (pickedSubjects.includes(id)) {
+      const removedLectures = new Set([
+        ...allLectures.filter((lecture) => lecture.subject_id === id).map((lecture) => lecture.id),
+        noLectureKey(id),
+      ]);
+      setPickedSubjects(pickedSubjects.filter((subjectId) => subjectId !== id));
+      setPickedLectures(pickedLectures.filter((lectureId) => !removedLectures.has(lectureId)));
+    } else {
+      setPickedSubjects([...pickedSubjects, id]);
+    }
+  };
+
+  const toggleLecture = (id) => setPickedLectures((current) =>
+    current.includes(id) ? current.filter((lectureId) => lectureId !== id) : [...current, id]
+  );
+
+  const isDue = (item) => item.progress
+    && (!item.progress.next_review || new Date(item.progress.next_review) <= new Date());
+  const isNew = (item) => !item.progress;
+  const isLearning = (item) => item.progress && (
+    item.progress.status === "learning"
+    || Number(item.progress.repetitions) < 3
+    || Number(item.progress.interval_days) <= 3
+  );
+  const passStatus = (item) =>
+    status.all
+    || (status.due && isDue(item))
+    || (status.new && isNew(item))
+    || (status.learning && isLearning(item));
+
+  const inSystem = (item) => !pickedSystems.length || pickedSystems.includes(item.system_id);
+  const inSubject = (item) => !pickedSubjects.length || pickedSubjects.includes(item.subject_id);
+  const inLecture = (item) => {
+    if (!pickedLectures.length) return true;
+    const bucketId = item.lecture_id || noLectureKey(item.subject_id);
+    return pickedLectures.includes(bucketId);
+  };
+  const inCascade = (item) => inSystem(item) && inSubject(item) && inLecture(item);
+
+  const statusCounts = { due: 0, new: 0, learning: 0, all: 0 };
+  cardPool.forEach((item) => {
+    if (!inCascade(item)) return;
+    statusCounts.all += 1;
+    if (isDue(item)) statusCounts.due += 1;
+    if (isNew(item)) statusCounts.new += 1;
+    if (isLearning(item)) statusCounts.learning += 1;
+  });
+
+  const statusPool = cardPool.filter(passStatus);
+  const systemCounts = {};
+  const subjectCounts = {};
+  const lectureCounts = {};
+  statusPool.forEach((item) => {
+    if (item.system_id) systemCounts[item.system_id] = (systemCounts[item.system_id] || 0) + 1;
+    if (item.subject_id) subjectCounts[item.subject_id] = (subjectCounts[item.subject_id] || 0) + 1;
+    const bucketId = item.lecture_id || noLectureKey(item.subject_id);
+    lectureCounts[bucketId] = (lectureCounts[bucketId] || 0) + 1;
+  });
+
+  const shownSubjects = allSubjects.filter((subject) => pickedSystems.includes(subject.system_id));
+  const shownLectures = allLectures.filter((lecture) => pickedSubjects.includes(lecture.subject_id));
+  const noLectureOptions = pickedSubjects
+    .filter((subjectId) => cardPool.some((item) => item.subject_id === subjectId && !item.lecture_id))
+    .map((subjectId) => ({
+      id: noLectureKey(subjectId),
+      title: `No lecture · ${allSubjects.find((subject) => subject.id === subjectId)?.name || "Subject"}`,
+      subject_id: subjectId,
+    }));
+  const lectureOptions = [...shownLectures, ...noLectureOptions];
+
+  const finalPool = cardPool.filter((item) => inCascade(item) && passStatus(item));
+  const availableCount = finalPool.length;
+  const clampNum = (raw) => {
+    if (availableCount === 0) return 0;
+    const parsed = parseInt(raw, 10);
+    if (Number.isNaN(parsed)) return 1;
+    return Math.max(1, Math.min(availableCount, parsed));
+  };
+  const selectedCount = clampNum(numCards);
+
+  const subjectsLocked = pickedSystems.length === 0;
+  const lecturesLocked = pickedSubjects.length === 0;
+  const systemsAllOn = systems.length > 0 && pickedSystems.length === systems.length;
+  const subjectsAllOn = shownSubjects.length > 0 && pickedSubjects.length === shownSubjects.length;
+  const lecturesAllOn = lectureOptions.length > 0 && pickedLectures.length === lectureOptions.length;
+
+  const toggleSystemsMaster = () => {
+    if (systemsAllOn) {
+      setPickedSystems([]);
+      setPickedSubjects([]);
+      setPickedLectures([]);
+    } else {
+      setPickedSystems(systems.map((system) => system.id));
+    }
+  };
+  const toggleSubjectsMaster = () => {
+    if (subjectsAllOn) {
+      setPickedSubjects([]);
+      setPickedLectures([]);
+    } else {
+      setPickedSubjects(shownSubjects.map((subject) => subject.id));
+    }
+  };
+  const toggleLecturesMaster = () => {
+    setPickedLectures(lecturesAllOn ? [] : lectureOptions.map((lecture) => lecture.id));
+  };
 
   /* ---- rate ---- */
   async function rate(rating) {
@@ -362,39 +421,7 @@ export default function Flashcards() {
   }
 
   const pct = queue.length ? Math.round((idx/queue.length)*100) : 0;
-
-  /* ---- shared setup render bits (themed) ---- */
-  const check = (on, size = 26) => (
-    <span style={{ width: size, height: size, borderRadius: 7, flexShrink: 0, border: `2px solid ${on ? accent : "#CBD5E1"}`, background: on ? accent : "transparent", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, fontWeight: 800 }}>
-      {on ? "✓" : ""}
-    </span>
-  );
-  const pill = (n) => (
-    <span style={{ color: accent, fontSize: 12, fontWeight: 600, border: `1px solid ${pillBorder}`, borderRadius: 999, padding: "1px 9px", flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>({n})</span>
-  );
-  const row = (key, on, onClick, label, count) => (
-    <button key={key} onClick={onClick} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", border: `1px solid ${on ? accent : t.border}`, borderRadius: 10, background: on ? selBg : t.card, cursor: "pointer", textAlign: "left", width: "100%", fontFamily: font, color: t.text }}>
-      {check(on)}
-      <span style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 8 }}>
-        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 14 }}>{label}</span>
-        {pill(count)}
-      </span>
-    </button>
-  );
-  const sectionHead = (title, master, locked) => (
-    <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
-      {master && (
-        <button onClick={master.onToggle} disabled={locked} style={{ background: "transparent", border: "none", padding: 0, cursor: locked ? "default" : "pointer", lineHeight: 0 }} aria-label="Select all">
-          {check(master.on)}
-        </button>
-      )}
-      <span style={{ fontSize: 19, fontWeight: 500, color: headColor }}>{title}</span>
-    </div>
-  );
-  const grid = { display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(2, 1fr)", gap: 14 };
-  const divider = { height: 0, borderTop: `0.5px solid ${t.border}`, margin: "24px 0" };
-  const subjectsLocked = !sysId;
-  const lecturesLocked = multi ? subIds.length === 0 : !subId;
+  const setupTheme = { t, accent, selectedBackground: selBg, pillBorder, headColor };
 
   /* ============ RENDER ============ */
   return (
@@ -423,7 +450,7 @@ export default function Flashcards() {
         </div>
       )}
 
-      <div style={{ maxWidth:760, margin:"0 auto", padding:"22px 16px" }}>
+      <div style={{ maxWidth:phase === "setup" ? 920 : 760, margin:"0 auto", padding:phase === "setup" ? "22px 16px 110px" : "22px 16px" }}>
         {loading && (
           <div style={{ paddingTop: 8 }}>
             <Skeleton width={180} height={26} radius={8} color={t.border} style={{ marginBottom: 22 }} />
@@ -458,71 +485,85 @@ export default function Flashcards() {
         {/* ---------- SETUP ---------- */}
         {!loading && !error && phase==="setup" && (
           <div>
-            {/* header + mode toggle */}
-            <div style={{ display:"flex", alignItems:"center", marginBottom:4 }}>
-              <h1 style={{ fontSize:24, margin:0, color:headColor, fontWeight:600 }}>{multi ? "Multi-deck Review" : "Deck Review"}</h1>
-              <div style={{ flex:1 }} />
-              <button onClick={toggleMulti} style={{ background:"transparent", border:`1px solid ${t.border}`, borderRadius:999, padding:"7px 14px", color:accent, fontWeight:600, fontSize:13, cursor:"pointer", fontFamily:font }}>
-                {multi ? "← Single deck" : "Multi-deck review →"}
-              </button>
-            </div>
-            <p style={{ color:t.muted, fontSize:14, margin:"0 0 24px" }}>
-              {multi ? "Combine several subjects or lectures into one session — great for midterm and final prep." : "Pick a system, subject and lecture to review."}
-            </p>
+            <h1 style={{ fontSize:26, margin:"0 0 4px", color:headColor }}>Create Review</h1>
+            <p style={{ color:t.muted, margin:"0 0 28px", fontSize:14 }}>Build a custom flashcard review.</p>
 
-            {/* System (single-select) */}
-            {sectionHead("Systems")}
-            {systems.length === 0 ? (
-              <span style={{ color:t.muted, fontSize:14 }}>No systems yet.</span>
-            ) : (
-              <div style={grid}>
-                {systems.map((s) => row(s.id, s.id === sysId, () => pickSystem(s), s.name, sysDue(s.id)))}
+            <Section title="Card Status" totalPill={availableCount} theme={setupTheme}>
+              <div style={{ display:"flex", flexWrap:"wrap", alignItems:"center", gap:"12px 26px" }}>
+                <StatusToggle on={status.due} onClick={() => toggleStatus("due")} label="Due" count={statusCounts.due} theme={setupTheme} />
+                <StatusToggle on={status.new} onClick={() => toggleStatus("new")} label="New" count={statusCounts.new} theme={setupTheme} />
+                <StatusToggle on={status.learning} onClick={() => toggleStatus("learning")} label="Learning" count={statusCounts.learning} theme={setupTheme} />
+                <StatusToggle on={status.all} onClick={() => toggleStatus("all")} label="All" count={statusCounts.all} theme={setupTheme} />
               </div>
-            )}
+            </Section>
 
-            <div style={divider} />
-
-            {/* Subjects */}
-            <div style={{ opacity: subjectsLocked ? 0.4 : 1 }}>
-              {sectionHead("Subjects", multi ? { on: subAllOn, onToggle: subMaster } : null, subjectsLocked)}
-              {subjects.length === 0 ? (
-                <span style={{ color:t.muted, fontSize:14 }}>No subjects with cards in this system.</span>
+            <Section title="Systems" master={{ on: systemsAllOn, onToggle: toggleSystemsMaster }} theme={setupTheme}>
+              {systems.length === 0 ? (
+                <Empty theme={setupTheme}>No systems configured yet.</Empty>
               ) : (
-                <div style={grid}>
-                  {subjects.map((s) => row(s.id, multi ? subIds.includes(s.id) : s.id === subId, () => onSubject(s.id), s.name, counts[s.id]?.due || 0))}
-                </div>
+                <Grid single={isMobile}>
+                  {systems.map((system) => (
+                    <CheckRow key={system.id} on={pickedSystems.includes(system.id)} onClick={() => toggleSystem(system.id)} label={system.name} count={systemCounts[system.id] || 0} theme={setupTheme} />
+                  ))}
+                </Grid>
+              )}
+            </Section>
+
+            <Section title="Subjects" locked={subjectsLocked} master={{ on: subjectsAllOn, onToggle: toggleSubjectsMaster, disabled: subjectsLocked }} theme={setupTheme}>
+              {subjectsLocked ? (
+                <Locked theme={setupTheme}>Select a system first.</Locked>
+              ) : shownSubjects.length === 0 ? (
+                <Empty theme={setupTheme}>No subjects for the selected systems.</Empty>
+              ) : (
+                <Grid single={isMobile}>
+                  {shownSubjects.map((subject) => (
+                    <CheckRow key={subject.id} on={pickedSubjects.includes(subject.id)} onClick={() => toggleSubject(subject.id)} label={subject.name} count={subjectCounts[subject.id] || 0} theme={setupTheme} />
+                  ))}
+                </Grid>
+              )}
+            </Section>
+
+            <Section title="Lectures" locked={lecturesLocked} master={{ on: lecturesAllOn, onToggle: toggleLecturesMaster, disabled: lecturesLocked }} theme={setupTheme}>
+              {lecturesLocked ? (
+                <Locked theme={setupTheme}>Select a subject first.</Locked>
+              ) : lectureOptions.length === 0 ? (
+                <Empty theme={setupTheme}>No lectures for the selected subjects.</Empty>
+              ) : (
+                <Grid single={isMobile}>
+                  {lectureOptions.map((lecture) => (
+                    <CheckRow key={lecture.id} on={pickedLectures.includes(lecture.id)} onClick={() => toggleLecture(lecture.id)} label={lecture.title} count={lectureCounts[lecture.id] || 0} theme={setupTheme} />
+                  ))}
+                </Grid>
+              )}
+            </Section>
+
+            <div style={{ position:"fixed", bottom:0, left:0, right:0, background:t.card, borderTop:`1px solid ${t.border}`, padding:"14px 20px", display:"flex", alignItems:"center", gap:16, justifyContent:"center", flexWrap:"wrap", zIndex:20 }}>
+              <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                <input
+                  type="number"
+                  min={availableCount ? 1 : 0}
+                  max={availableCount}
+                  value={numCards}
+                  onChange={(event) => setNumCards(event.target.value)}
+                  onBlur={() => setNumCards(String(clampNum(numCards)))}
+                  style={{ width:90, padding:"10px 12px", fontSize:16, color:t.text, background:t.card, border:`1px solid ${t.border}`, borderRadius:8 }}
+                />
+                <span style={{ color:t.muted, fontSize:14 }}>
+                  of <strong style={{ color:t.text }}>{availableCount}</strong> selected
+                </span>
+              </div>
+              {setupError && <span style={{ color:dark ? "#F87171" : "#DC2626", fontSize:13 }}>{setupError}</span>}
+              <button
+                onClick={() => startReview(finalPool, numCards)}
+                disabled={starting || availableCount === 0}
+                style={{ background:accent, color:"#fff", border:"none", borderRadius:10, padding:"12px 30px", fontSize:15, fontWeight:700, cursor:starting || availableCount === 0 ? "not-allowed" : "pointer", fontFamily:font, opacity:starting || availableCount === 0 ? 0.6 : 1 }}
+              >
+                {starting ? "Starting…" : `Start review${availableCount > 0 ? ` · ${selectedCount}` : ""}`}
+              </button>
+              {sessionMode && availableCount === 0 && (
+                <button onClick={() => goToNextTask(navigate)} style={{ background:"#16A34A", color:"#fff", border:"none", borderRadius:10, padding:"12px 30px", fontSize:15, fontWeight:700, cursor:"pointer", fontFamily:font }}>Next task →</button>
               )}
             </div>
-
-            <div style={divider} />
-
-            {/* Lectures */}
-            <div style={{ opacity: lecturesLocked ? 0.4 : 1 }}>
-              {sectionHead("Lectures", multi ? { on: lecAllOn, onToggle: lecMaster } : null, lecturesLocked)}
-              {multi ? (
-                lecturesMulti.length === 0 ? (
-                  <span style={{ color:t.muted, fontSize:13 }}>Select subjects to combine their lectures, or just review whole subjects.</span>
-                ) : (
-                  <div style={grid}>
-                    {lecturesMulti.map((l) => row(l.id, lecIds.includes(l.id), () => onLecture(l.id), l.title, counts[l.id]?.due || 0))}
-                  </div>
-                )
-              ) : (
-                <div style={grid}>
-                  {row("all", lecId === "all", () => onLecture("all"), "All lectures", counts[subId]?.due || 0)}
-                  {lectures.map((l) => row(l.id, lecId === l.id, () => onLecture(l.id), l.title, counts[l.id]?.due || 0))}
-                </div>
-              )}
-            </div>
-
-            <div style={{ ...divider, marginBottom: 20 }} />
-
-            <button onClick={start} disabled={!canStart} style={{
-              width:"100%", padding:15, background: canStart ? "#2563EB" : t.border, color:"#fff", border:"none",
-              borderRadius:10, fontSize:15, fontWeight:700, cursor: canStart ? "pointer" : "default", fontFamily:font,
-            }}>
-              Start review{selDue() > 0 ? ` · ${selDue()} due` : ""}
-            </button>
           </div>
         )}
 
@@ -530,6 +571,9 @@ export default function Flashcards() {
         {!loading && phase==="review" && queue[idx] && (
           <div>
             <div style={{ background:t.card, borderRadius:16, padding:revealed?"30px 28px":"36px 28px", minHeight:260, position:"relative", display:"flex", flexDirection:"column" }}>
+              {sourceLabel && (
+                <div style={{ fontSize:12, color:t.muted, marginBottom:8 }}>{sourceLabel}</div>
+              )}
               <div style={{ fontSize:11, color:t.muted, textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:12 }}>Question</div>
               <div style={{ fontSize:revealed?17:19, lineHeight:1.6, color:t.text, whiteSpace:"pre-wrap", flex:revealed?"none":1 }}>{queue[idx].card.front}</div>
 
@@ -587,6 +631,96 @@ export default function Flashcards() {
     </div>
     </>
   );
+}
+
+/* ---- setup sub-components (mirrors Questions.jsx) ---- */
+function Section({ title, children, locked, master, totalPill, theme }) {
+  const { t, headColor } = theme;
+  return (
+    <div style={{ opacity:locked ? 0.4 : 1, padding:"22px 0", borderTop:`0.5px solid ${t.border}` }}>
+      <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:16 }}>
+        {master && (
+          <button
+            onClick={master.onToggle}
+            disabled={master.disabled}
+            aria-label="Select all"
+            style={{ background:"transparent", border:"none", padding:0, cursor:master.disabled ? "default" : "pointer", lineHeight:0 }}
+          >
+            <Checkbox on={master.on} theme={theme} />
+          </button>
+        )}
+        <h3 style={{ margin:0, fontSize:19, fontWeight:500, color:headColor }}>{title}</h3>
+        {totalPill != null && <TotalPill n={totalPill} theme={theme} />}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function Grid({ children, single }) {
+  return <div style={{ display:"grid", gridTemplateColumns:single ? "1fr" : "repeat(2, 1fr)", gap:14 }}>{children}</div>;
+}
+
+function CheckRow({ on, onClick, label, count, theme }) {
+  const { t, accent, selectedBackground } = theme;
+  return (
+    <button
+      onClick={onClick}
+      style={{ display:"flex", alignItems:"center", gap:12, padding:"12px 14px", border:`1px solid ${on ? accent : t.border}`, borderRadius:10, background:on ? selectedBackground : t.card, cursor:"pointer", textAlign:"left", width:"100%", fontFamily:font }}
+    >
+      <Checkbox on={on} theme={theme} />
+      <span style={{ flex:1, minWidth:0, display:"flex", alignItems:"center", gap:8 }}>
+        <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", fontSize:14, color:t.text }}>{label}</span>
+        <CountPill n={count} theme={theme} />
+      </span>
+    </button>
+  );
+}
+
+function StatusToggle({ on, onClick, label, count, theme }) {
+  const { t, accent } = theme;
+  return (
+    <button onClick={onClick} style={{ display:"inline-flex", alignItems:"center", gap:8, background:"transparent", border:"none", cursor:"pointer", padding:"2px 0", fontFamily:font }}>
+      <span style={{ width:18, height:18, borderRadius:5, flexShrink:0, border:`2px solid ${on ? accent : "#CBD5E1"}`, background:on ? accent : t.card, color:"#fff", display:"flex", alignItems:"center", justifyContent:"center", fontSize:11, fontWeight:800 }}>
+        {on ? "✓" : ""}
+      </span>
+      <span style={{ fontSize:14, color:t.text }}>{label}</span>
+      <CountPill n={count} theme={theme} />
+    </button>
+  );
+}
+
+function CountPill({ n, theme }) {
+  return (
+    <span style={{ color:theme.accent, fontSize:12, fontWeight:600, border:`1px solid ${theme.pillBorder}`, borderRadius:999, padding:"1px 9px", flexShrink:0, fontVariantNumeric:"tabular-nums" }}>
+      ({n})
+    </span>
+  );
+}
+
+function TotalPill({ n, theme }) {
+  return (
+    <span style={{ color:theme.accent, fontSize:13, fontWeight:700, border:`1px solid ${theme.pillBorder}`, background:theme.selectedBackground, borderRadius:999, padding:"3px 12px" }}>
+      Total Available {n}
+    </span>
+  );
+}
+
+function Checkbox({ on, theme }) {
+  const { t, accent } = theme;
+  return (
+    <span style={{ width:26, height:26, borderRadius:7, flexShrink:0, border:`2px solid ${on ? accent : "#CBD5E1"}`, background:on ? accent : t.card, color:"#fff", display:"flex", alignItems:"center", justifyContent:"center", fontSize:15, fontWeight:800 }}>
+      {on ? "✓" : ""}
+    </span>
+  );
+}
+
+function Locked({ children, theme }) {
+  return <div style={{ padding:16, border:`1px dashed ${theme.t.border}`, borderRadius:10, color:theme.t.muted, fontStyle:"italic" }}>{children}</div>;
+}
+
+function Empty({ children, theme }) {
+  return <div style={{ padding:16, border:`1px dashed ${theme.t.border}`, borderRadius:10, color:theme.t.muted }}>{children}</div>;
 }
 
 /* styles */

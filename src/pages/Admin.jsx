@@ -580,17 +580,31 @@ function ManageQuestions() {
 // 4. MANAGE FLASHCARDS
 // ════════════════════════════════════════════════════════════════════════════
 function FlashcardForm({ subjects, initial, onClose, onSaved }) {
-  const [c, setC] = useState({ subject_id: initial?.subject_id || subjects[0]?.id || "", front: initial?.front || "", back: initial?.back || "" });
+  const [c, setC] = useState({
+    subject_id: initial?.subject_id || subjects[0]?.id || "",
+    topic_id: initial?.topic_id || "",
+    lecture_id: initial?.lecture_id || "",
+    front: initial?.front || "",
+    back: initial?.back || "",
+  });
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
   const editing = !!initial?.id;
+  const topics = useTopics(c.subject_id);
+  const lectures = useLectures(c.subject_id);
 
   const save = async () => {
     setErr("");
     if (!c.subject_id) return setErr("Choose a subject.");
     if (!c.front.trim() || !c.back.trim()) return setErr("Front and back are both required.");
     setSaving(true);
-    const payload = { subject_id: c.subject_id, front: c.front.trim(), back: c.back.trim() };
+    const payload = {
+      subject_id: c.subject_id,
+      topic_id: c.topic_id || null,
+      lecture_id: c.lecture_id || null,
+      front: c.front.trim(),
+      back: c.back.trim(),
+    };
     const res = editing ? await supabase.from("flashcards").update(payload).eq("id", initial.id) : await supabase.from("flashcards").insert(payload);
     setSaving(false);
     if (res.error) return setErr(res.error.message);
@@ -611,9 +625,31 @@ function FlashcardForm({ subjects, initial, onClose, onSaved }) {
       {err && <Banner>{err}</Banner>}
       <div style={{ marginBottom: 14 }}>
         <FieldLabel>Subject</FieldLabel>
-        <select value={c.subject_id} onChange={(e) => setC({ ...c, subject_id: e.target.value })} style={inputStyle}>
+        <select
+          value={c.subject_id}
+          onChange={(e) => setC({ ...c, subject_id: e.target.value, topic_id: "", lecture_id: "" })}
+          style={inputStyle}
+        >
           {subjects.map((s) => (
             <option key={s.id} value={s.id}>{s.name}</option>
+          ))}
+        </select>
+      </div>
+      <div style={{ marginBottom: 14 }}>
+        <FieldLabel>Topic (optional)</FieldLabel>
+        <select value={c.topic_id} onChange={(e) => setC({ ...c, topic_id: e.target.value })} style={inputStyle} disabled={!c.subject_id}>
+          <option value="">— No topic —</option>
+          {topics.map((t) => (
+            <option key={t.id} value={t.id}>{t.name}</option>
+          ))}
+        </select>
+      </div>
+      <div style={{ marginBottom: 14 }}>
+        <FieldLabel>Lecture (optional)</FieldLabel>
+        <select value={c.lecture_id} onChange={(e) => setC({ ...c, lecture_id: e.target.value })} style={inputStyle} disabled={!c.subject_id}>
+          <option value="">— No lecture —</option>
+          {lectures.map((l) => (
+            <option key={l.id} value={l.id}>{l.title}</option>
           ))}
         </select>
       </div>
