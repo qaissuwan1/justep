@@ -39,11 +39,35 @@
 --     concept<->objective coverage)
 --   * approve_blueprint / create_successor_blueprint RPCs (SECURITY DEFINER)
 --
--- Weights store ONLY the three dimensions (integer 0..3). EP is never stored and
--- no EP coefficient formula is implemented or hard-coded here (DOC-004 §17, WT-5).
+-- Weights store ONLY the three dimensions via the reusable `weight_ordinal`
+-- domain (exactly {0,1,2,3}; fractional input is REJECTED, never rounded). EP is
+-- never stored and no EP coefficient formula is implemented here (DOC-004 §17, WT-5).
 -- ============================================================================
 
 create extension if not exists pgcrypto;  -- gen_random_uuid()
+
+-- ============================================================================
+-- Reusable weight domain — the canonical ordinal {0, 1, 2, 3}.
+--
+-- Base type is `numeric` ON PURPOSE (not smallint/integer): assigning a
+-- fractional literal to an integer target makes PostgreSQL's ASSIGNMENT CAST
+-- silently ROUND it (1.5 -> 2) BEFORE any CHECK runs. With a `numeric` base the
+-- value 1.5 is preserved, so the domain CHECK rejects it. `numeric(1,0)` is NOT
+-- used because it would round on the cast too — the base must be unconstrained
+-- `numeric`. Accepts EXACTLY 0/1/2/3; rejects fractional values and any value
+-- < 0 or > 3. Applied to cw_value / clw_value / sw_value.
+--
+-- Guarded for idempotency (CREATE DOMAIN has no IF NOT EXISTS) — same guard
+-- style the repo already uses for CHECK constraints in migration 014.
+-- ============================================================================
+do $$
+begin
+  create domain public.weight_ordinal as numeric
+    check (value in (0, 1, 2, 3));
+exception
+  when duplicate_object then null;
+end
+$$;
 
 -- ============================================================================
 -- 1. blueprints — the X-10/X-11 versioned AGGREGATE ROOT
@@ -140,7 +164,8 @@ create index if not exists idx_concepts_lecture   on public.concepts (lecture_id
 
 -- ============================================================================
 -- 4. concept_weights — child, 1:1 with concepts
---    Three dimensions, each integer 0..3 (DOC-003 §6.2-§6.4; DOC-004 §5).
+--    Three dimensions, each the `weight_ordinal` domain (exactly {0,1,2,3};
+--    DOC-003 §6.2-§6.4; DOC-004 §5). Fractional input is rejected, not rounded.
 --    Explicit state per dimension (X-4; realizes CO-7 "no weight null"):
 --      pending        -> not yet assessed (value NULL); != assigned 0
 --      assigned       -> a determinate integer 0..3 (0 is a valid value)
@@ -155,23 +180,24 @@ create table if not exists public.concept_weights (
 
   -- CW (WT-1, lecture-derived)
   cw_state      text not null default 'pending' check (cw_state in ('pending','assigned','not_assessable')),
-  cw_value      smallint check (cw_value between 0 and 3),   -- integer 0..3; 0 valid
+  cw_value      public.weight_ordinal,   -- exactly {0,1,2,3}; fractions rejected (no silent rounding); 0 valid
   cw_evidence   text,
   cw_confidence text check (cw_confidence in ('high','medium','low')),  -- X-9
   cw_rationale  text,
 
-  -- CLW (WT-2). Slice-1 assigned bound is 0..1: value >= 2 requires an attached
-  -- clinical correlation (out of Slice-1 scope). Relax to 0..3 once correlations
-  -- + WT-2 enforcement land.
+  -- CLW (WT-2). FULL canonical domain 0..3. WT-2 ("CLW >= 2 requires an attached
+  -- Clinical Correlation") is a CROSS-OBJECT invariant, NOT a column restriction:
+  -- it belongs to a later approval rule (022+), once Clinical Correlations exist.
+  -- The persistence schema preserves the full {0,1,2,3} domain here.
   clw_state      text not null default 'pending' check (clw_state in ('pending','assigned','not_assessable')),
-  clw_value      smallint check (clw_value between 0 and 3),
+  clw_value      public.weight_ordinal,
   clw_evidence   text,
   clw_confidence text check (clw_confidence in ('high','medium','low')),
   clw_rationale  text,
 
   -- SW (WT-3, manual in M1)
   sw_state               text not null default 'pending' check (sw_state in ('pending','assigned','not_assessable')),
-  sw_value               smallint check (sw_value between 0 and 3),
+  sw_value               public.weight_ordinal,
   sw_source              text,                                              -- DOC-004 §5: external reference consulted, or an 'unknown' marker
   sw_assigned_by         text check (sw_assigned_by in ('human')),          -- M1: only 'human'; reference_base rejected outright (DOC-004 §5 / WT-3)
   sw_confidence          text check (sw_confidence in ('high','medium','low')),
@@ -198,7 +224,7 @@ create table if not exists public.concept_weights (
   ),
   constraint clw_state_consistency check (
        (clw_state = 'pending'        and clw_value is null)
-    or (clw_state = 'assigned'       and clw_value is not null and clw_value in (0,1) and clw_evidence is not null and clw_confidence is not null)  -- Slice-1 bound 0..1 (WT-2)
+    or (clw_state = 'assigned'       and clw_value is not null and clw_evidence is not null and clw_confidence is not null)  -- full 0..3 domain; WT-2 (>=2 needs a correlation) is a later cross-object rule
     or (clw_state = 'not_assessable' and clw_value is null and clw_rationale is not null and btrim(clw_rationale) <> '')
   ),
   constraint sw_state_consistency check (
@@ -352,6 +378,10 @@ create policy "concept_source_refs_admin_all" on public.concept_source_reference
 /*
 === VERIFICATION — run in the Supabase SQL editor / psql after applying 021 ===
 
+-- 0. Weight domain exists (base type numeric, so fractions are rejected not rounded)
+SELECT domain_name, data_type FROM information_schema.domains
+WHERE domain_schema='public' AND domain_name='weight_ordinal';   -- expect 1 row, data_type = numeric
+
 -- 1. All eight tables exist
 SELECT table_name FROM information_schema.tables
 WHERE table_schema='public' AND table_name IN
@@ -389,14 +419,18 @@ WHERE schemaname='public' AND tablename IN
   'concept_objectives','learning_objective_source_references','concept_source_references')
 ORDER BY tablename;
 
--- 6. Weight CHECKs reject invalid values / inconsistent states (each should ERROR):
---   INSERT ... concept_weights (concept_id, cw_state, cw_value) VALUES (<c>, 'assigned', 4);        -- value out of range
---   INSERT ... concept_weights (concept_id, cw_state, cw_value) VALUES (<c>, 'assigned', 1.5);      -- non-integer (smallint rejects)
---   INSERT ... concept_weights (concept_id, cw_state, cw_value) VALUES (<c>, 'pending', 0);         -- pending must have NULL value
+-- 6a. These should ERROR (domain / state CHECKs reject invalid values or states):
+--   INSERT ... concept_weights (concept_id, cw_state, cw_value) VALUES (<c>, 'assigned', 4);        -- > 3 (domain rejects)
+--   INSERT ... concept_weights (concept_id, cw_state, cw_value) VALUES (<c>, 'assigned', 1.5);      -- FRACTION rejected, NOT rounded (weight_ordinal / numeric base)
+--   INSERT ... concept_weights (concept_id, cw_state, cw_value) VALUES (<c>, 'assigned', -1);       -- < 0 (domain rejects)
+--   INSERT ... concept_weights (concept_id, cw_state, cw_value) VALUES (<c>, 'pending', 0);         -- pending must have NULL value (distinct from assigned 0)
 --   INSERT ... concept_weights (concept_id, sw_state, sw_value, sw_assigned_by, sw_source, sw_confidence,
 --            sw_assigned_by_user_id, sw_rationale, sw_assigned_at, sw_blueprint_version)
 --            VALUES (<c>, 'assigned', 2, 'reference_base', 's', 'high', <u>, 'r', now(), 1);         -- reference_base rejected
---   INSERT ... concept_weights (concept_id, clw_state, clw_value, clw_evidence, clw_confidence)
---            VALUES (<c>, 'assigned', 2, 'e', 'high');                                               -- CLW Slice-1 bound: >=2 rejected
 --   INSERT ... concept_weights (concept_id, cw_state, cw_rationale) VALUES (<c>, 'not_assessable', ''); -- empty rationale rejected
+-- 6b. These should SUCCEED (full CLW canonical domain 0..3 is now persistable):
+--   INSERT ... concept_weights (concept_id, clw_state, clw_value, clw_evidence, clw_confidence)
+--            VALUES (<c>, 'assigned', 2, 'e', 'high');   -- CLW 2 persists (WT-2 correlation rule is a later cross-object gate)
+--   INSERT ... concept_weights (concept_id, clw_state, clw_value, clw_evidence, clw_confidence)
+--            VALUES (<c>, 'assigned', 3, 'e', 'high');   -- CLW 3 persists
 */
