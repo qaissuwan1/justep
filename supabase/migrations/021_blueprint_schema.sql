@@ -34,6 +34,8 @@
 -- ROW-LOCAL consistency IS enforced here via CHECK constraints. DEFERRED TO 022:
 --   * transition-legality, same-blueprint, same-lecture, and >=1-source triggers
 --   * approved-aggregate immutability trigger
+--   * hard-DELETE guard trigger (defense-in-depth; 021 RLS denies DELETE only to the
+--     browser/API roles, not to BYPASSRLS / service_role contexts)
 --   * dimension-specific APPROVAL gate (CW assigned, SW assigned, CLW terminal;
 --     every active objective / live concept has >=1 source reference; bidirectional
 --     concept<->objective coverage)
@@ -89,7 +91,7 @@ create table if not exists public.blueprints (
   producer_class    text not null default 'human'
                       check (producer_class in ('analyzer','planner','generator','reviewer','human','evidence')),
   produced_at       timestamptz not null default now(),
-  spec_version      text,
+  spec_version      text not null check (btrim(spec_version) <> ''),
   created_by        uuid default auth.uid() references public.profiles (id) on delete set null,  -- acting admin identity
   deleted_at        timestamptz,                                                 -- P5 soft-delete
   constraint blueprints_lecture_version_unique unique (lecture_id, version)
@@ -119,7 +121,7 @@ create table if not exists public.learning_objectives (
   id                       uuid primary key default gen_random_uuid(),
   blueprint_id             uuid not null references public.blueprints (id) on delete cascade,   -- aggregate child
   lecture_id               uuid not null references public.lectures (id) on delete restrict,    -- N1 anchor
-  text                     text not null,                                                       -- declared = verbatim (LO-3; edit-immutability enforced in 022)
+  text                     text not null check (btrim("text") <> ''),                            -- declared = verbatim (LO-3; edit-immutability in 022); non-empty
   origin                   text not null check (origin in ('declared','derived')),              -- LO-1
   confirmation_status      text not null default 'pending'
                              check (confirmation_status in ('confirmed','pending','rejected')), -- LO-2 (app sets declared -> 'confirmed' on insert)
@@ -130,7 +132,7 @@ create table if not exists public.learning_objectives (
   producer_class           text not null default 'human'
                              check (producer_class in ('analyzer','planner','generator','reviewer','human','evidence')),
   produced_at              timestamptz not null default now(),
-  spec_version             text,
+  spec_version             text not null check (btrim(spec_version) <> ''),
   created_by               uuid default auth.uid() references public.profiles (id) on delete set null,
   deleted_at               timestamptz
 );
@@ -147,18 +149,18 @@ create table if not exists public.concepts (
   id             uuid primary key default gen_random_uuid(),
   blueprint_id   uuid not null references public.blueprints (id) on delete cascade,
   lecture_id     uuid not null references public.lectures (id) on delete restrict,
-  name           text not null,   -- noun phrase (CO-6)
-  statement      text not null,
+  name           text not null check (btrim("name") <> ''),   -- noun phrase (CO-6); non-empty
+  statement      text not null check (btrim(statement) <> ''),
   -- X-7 provenance
   producer_class text not null default 'human'
                    check (producer_class in ('analyzer','planner','generator','reviewer','human','evidence')),
   produced_at    timestamptz not null default now(),
-  spec_version   text,
+  spec_version   text not null check (btrim(spec_version) <> ''),
   created_by     uuid default auth.uid() references public.profiles (id) on delete set null,
   deleted_at     timestamptz
 );
 -- case-insensitive unique concept name within a blueprint (CO-6, no duplicates)
-create unique index if not exists uq_concepts_blueprint_name on public.concepts (blueprint_id, lower(name));
+create unique index if not exists uq_concepts_blueprint_name on public.concepts (blueprint_id, lower(name)) where deleted_at is null;  -- live-only: a soft-deleted concept does not reserve its name
 create index if not exists idx_concepts_blueprint on public.concepts (blueprint_id) where deleted_at is null;
 create index if not exists idx_concepts_lecture   on public.concepts (lecture_id);
 
@@ -210,31 +212,40 @@ create table if not exists public.concept_weights (
   producer_class text not null default 'human'
                    check (producer_class in ('analyzer','planner','generator','reviewer','human','evidence')),
   produced_at    timestamptz not null default now(),
-  spec_version   text,
+  spec_version   text not null check (btrim(spec_version) <> ''),
   created_by     uuid default auth.uid() references public.profiles (id) on delete set null,
   deleted_at     timestamptz,
 
-  -- Row-local state consistency (X-4). pending has NO value (never confused with
-  -- an assigned 0); assigned requires value + confidence (+ evidence/provenance);
-  -- not_assessable requires a non-empty rationale and NO value.
+  -- Row-local state consistency (X-4) — MUTUALLY EXCLUSIVE: each state pins EVERY
+  -- relevant field so no stale field can coexist. Assigned 0 is legal (value NOT
+  -- NULL) and distinct from pending (value NULL).
+  --   CW/CLW: rationale is reserved for not_assessable (NULL when assigned);
+  --           confidence is NULL for both pending and not_assessable.
+  --   SW: rationale is required when assigned (owner mandate) AND when
+  --       not_assessable. The not_assessable decision's who/when is carried by the
+  --       row's X-7 provenance (created_by / produced_at), so ALL sw assignment
+  --       fields (value/source/assigned_by/confidence/user_id/assigned_at/
+  --       blueprint_version) are NULL in that state — no stale assigned provenance.
   constraint cw_state_consistency check (
-       (cw_state = 'pending'        and cw_value is null)
-    or (cw_state = 'assigned'       and cw_value is not null and cw_evidence is not null and cw_confidence is not null)
-    or (cw_state = 'not_assessable' and cw_value is null and cw_rationale is not null and btrim(cw_rationale) <> '')
+       (cw_state = 'pending'        and cw_value is null and cw_evidence is null and cw_confidence is null and cw_rationale is null)
+    or (cw_state = 'assigned'       and cw_value is not null and cw_evidence is not null and btrim(cw_evidence) <> '' and cw_confidence is not null and cw_rationale is null)
+    or (cw_state = 'not_assessable' and cw_value is null and cw_evidence is null and cw_confidence is null and cw_rationale is not null and btrim(cw_rationale) <> '')
   ),
-  constraint clw_state_consistency check (
-       (clw_state = 'pending'        and clw_value is null)
-    or (clw_state = 'assigned'       and clw_value is not null and clw_evidence is not null and clw_confidence is not null)  -- full 0..3 domain; WT-2 (>=2 needs a correlation) is a later cross-object rule
-    or (clw_state = 'not_assessable' and clw_value is null and clw_rationale is not null and btrim(clw_rationale) <> '')
+  constraint clw_state_consistency check (   -- full 0..3 domain; WT-2 (>=2 needs a correlation) is a later cross-object rule
+       (clw_state = 'pending'        and clw_value is null and clw_evidence is null and clw_confidence is null and clw_rationale is null)
+    or (clw_state = 'assigned'       and clw_value is not null and clw_evidence is not null and btrim(clw_evidence) <> '' and clw_confidence is not null and clw_rationale is null)
+    or (clw_state = 'not_assessable' and clw_value is null and clw_evidence is null and clw_confidence is null and clw_rationale is not null and btrim(clw_rationale) <> '')
   ),
   constraint sw_state_consistency check (
-       (sw_state = 'pending'        and sw_value is null)
-    or (sw_state = 'assigned'       and sw_value is not null and sw_source is not null
-                                    and sw_assigned_by = 'human' and sw_confidence is not null
-                                    and sw_assigned_by_user_id is not null
+       (sw_state = 'pending'        and sw_value is null and sw_source is null and sw_assigned_by is null and sw_confidence is null
+                                    and sw_assigned_by_user_id is null and sw_rationale is null and sw_assigned_at is null and sw_blueprint_version is null)
+    or (sw_state = 'assigned'       and sw_value is not null and sw_source is not null and btrim(sw_source) <> ''
+                                    and sw_assigned_by = 'human' and sw_confidence is not null and sw_assigned_by_user_id is not null
                                     and sw_rationale is not null and btrim(sw_rationale) <> ''
-                                    and sw_assigned_at is not null and sw_blueprint_version is not null)
-    or (sw_state = 'not_assessable' and sw_value is null and sw_rationale is not null and btrim(sw_rationale) <> '')
+                                    and sw_assigned_at is not null and sw_blueprint_version is not null and sw_blueprint_version >= 1)
+    or (sw_state = 'not_assessable' and sw_value is null and sw_source is null and sw_assigned_by is null and sw_confidence is null
+                                    and sw_assigned_by_user_id is null and sw_assigned_at is null and sw_blueprint_version is null
+                                    and sw_rationale is not null and btrim(sw_rationale) <> '')
   )
 );
 -- (concept_id already has a unique index from the UNIQUE column constraint)
@@ -250,7 +261,7 @@ create table if not exists public.source_references (
   id             uuid primary key default gen_random_uuid(),
   lecture_id     uuid not null references public.lectures (id) on delete restrict,  -- lecture-local (N1/SF-1)
   locator_type   text not null check (locator_type in ('slide','page','section','timestamp')),
-  locator_value  text not null,
+  locator_value  text not null check (btrim(locator_value) <> ''),
   anchor_text    text not null
                    check (btrim(anchor_text) <> ''
                           and array_length(regexp_split_to_array(btrim(anchor_text), '\s+'), 1) <= 15),  -- <=15 words
@@ -259,11 +270,15 @@ create table if not exists public.source_references (
   producer_class text not null default 'human'
                    check (producer_class in ('analyzer','planner','generator','reviewer','human','evidence')),
   produced_at    timestamptz not null default now(),
-  spec_version   text,
+  spec_version   text not null check (btrim(spec_version) <> ''),
   created_by     uuid default auth.uid() references public.profiles (id) on delete set null,
-  deleted_at     timestamptz,   -- soft-delete only (referenced anchors are protected; hard-delete blocked by RESTRICT on the joins)
-  constraint source_references_dedupe unique (lecture_id, locator_type, locator_value, anchor_text)
+  deleted_at     timestamptz    -- soft-delete only (referenced anchors are protected; hard-delete blocked by RESTRICT on the joins)
 );
+-- Dedup identical anchors within a lecture — among LIVE rows only, so re-adding an
+-- anchor after soft-deleting the old one is permitted (soft-delete uniqueness note).
+create unique index if not exists uq_source_refs_dedupe
+  on public.source_references (lecture_id, locator_type, locator_value, anchor_text)
+  where deleted_at is null;
 create index if not exists idx_source_refs_lecture on public.source_references (lecture_id) where deleted_at is null;
 
 -- ============================================================================
@@ -279,7 +294,7 @@ create table if not exists public.concept_objectives (
   producer_class text not null default 'human'
                    check (producer_class in ('analyzer','planner','generator','reviewer','human','evidence')),
   produced_at    timestamptz not null default now(),
-  spec_version   text,
+  spec_version   text not null check (btrim(spec_version) <> ''),
   created_by     uuid default auth.uid() references public.profiles (id) on delete set null,
   constraint concept_objectives_unique unique (concept_id, objective_id)
 );
@@ -299,7 +314,7 @@ create table if not exists public.learning_objective_source_references (
   producer_class      text not null default 'human'
                         check (producer_class in ('analyzer','planner','generator','reviewer','human','evidence')),
   produced_at         timestamptz not null default now(),
-  spec_version        text,
+  spec_version        text not null check (btrim(spec_version) <> ''),
   created_by          uuid default auth.uid() references public.profiles (id) on delete set null,
   constraint lo_source_refs_unique unique (objective_id, source_reference_id)
 );
@@ -318,7 +333,7 @@ create table if not exists public.concept_source_references (
   producer_class      text not null default 'human'
                         check (producer_class in ('analyzer','planner','generator','reviewer','human','evidence')),
   produced_at         timestamptz not null default now(),
-  spec_version        text,
+  spec_version        text not null check (btrim(spec_version) <> ''),
   created_by          uuid default auth.uid() references public.profiles (id) on delete set null,
   constraint concept_source_refs_unique unique (concept_id, source_reference_id)
 );
@@ -326,13 +341,20 @@ create index if not exists idx_concept_source_refs_concept on public.concept_sou
 create index if not exists idx_concept_source_refs_source  on public.concept_source_references (source_reference_id);
 
 -- ============================================================================
--- Row Level Security — ADMIN-ONLY for all eight tables.
--- Blueprint-authoring data is NOT student-facing in Slice 1: a single `for all`
--- policy grants admins full access; with no permissive policy for non-admins,
--- RLS default-denies every ordinary authenticated user. Admins intentionally see
--- soft-deleted rows too (to manage / restore); the application filters
--- `deleted_at is null` for ordinary live reads. Uses the existing
--- public.is_admin() (migration 003). No SECURITY DEFINER functions here.
+-- Row Level Security — ADMIN-ONLY, and NO hard-delete via RLS.
+-- Each table gets three admin-only policies: SELECT, INSERT, UPDATE. There is
+-- deliberately NO DELETE policy, so a hard DELETE from the browser/API roles
+-- (`anon` / `authenticated`) is RLS-denied. In Slice 1, deletion is SOFT (an
+-- UPDATE of `deleted_at`) and RESTORE is an UPDATE too — both covered by the
+-- UPDATE policy. Ordinary authenticated users are default-denied (is_admin() =
+-- false). Admins intentionally see soft-deleted rows (to restore); the
+-- application filters `deleted_at is null` for ordinary live reads.
+--
+-- CAVEAT: RLS does NOT constrain the table owner, `postgres`, or `service_role`
+-- (they have BYPASSRLS) — those contexts can still hard-DELETE and cascade.
+-- FULL hard-delete protection (a BEFORE DELETE trigger raising an exception,
+-- effective for every role) is defense-in-depth DEFERRED TO MIGRATION 022.
+-- Uses the existing public.is_admin() (migration 003). No SECURITY DEFINER here.
 -- ============================================================================
 alter table public.blueprints                            enable row level security;
 alter table public.learning_objectives                   enable row level security;
@@ -343,37 +365,77 @@ alter table public.concept_objectives                    enable row level securi
 alter table public.learning_objective_source_references  enable row level security;
 alter table public.concept_source_references             enable row level security;
 
-drop policy if exists "blueprints_admin_all" on public.blueprints;
-create policy "blueprints_admin_all" on public.blueprints
-  for all to authenticated using (public.is_admin()) with check (public.is_admin());
+-- blueprints
+drop policy if exists "blueprints_admin_all"    on public.blueprints;   -- supersede any older 021 FOR ALL policy
+drop policy if exists "blueprints_admin_select" on public.blueprints;
+create policy "blueprints_admin_select" on public.blueprints for select to authenticated using (public.is_admin());
+drop policy if exists "blueprints_admin_insert" on public.blueprints;
+create policy "blueprints_admin_insert" on public.blueprints for insert to authenticated with check (public.is_admin());
+drop policy if exists "blueprints_admin_update" on public.blueprints;
+create policy "blueprints_admin_update" on public.blueprints for update to authenticated using (public.is_admin()) with check (public.is_admin());
 
-drop policy if exists "learning_objectives_admin_all" on public.learning_objectives;
-create policy "learning_objectives_admin_all" on public.learning_objectives
-  for all to authenticated using (public.is_admin()) with check (public.is_admin());
+-- learning_objectives
+drop policy if exists "learning_objectives_admin_all"    on public.learning_objectives;
+drop policy if exists "learning_objectives_admin_select" on public.learning_objectives;
+create policy "learning_objectives_admin_select" on public.learning_objectives for select to authenticated using (public.is_admin());
+drop policy if exists "learning_objectives_admin_insert" on public.learning_objectives;
+create policy "learning_objectives_admin_insert" on public.learning_objectives for insert to authenticated with check (public.is_admin());
+drop policy if exists "learning_objectives_admin_update" on public.learning_objectives;
+create policy "learning_objectives_admin_update" on public.learning_objectives for update to authenticated using (public.is_admin()) with check (public.is_admin());
 
-drop policy if exists "concepts_admin_all" on public.concepts;
-create policy "concepts_admin_all" on public.concepts
-  for all to authenticated using (public.is_admin()) with check (public.is_admin());
+-- concepts
+drop policy if exists "concepts_admin_all"    on public.concepts;
+drop policy if exists "concepts_admin_select" on public.concepts;
+create policy "concepts_admin_select" on public.concepts for select to authenticated using (public.is_admin());
+drop policy if exists "concepts_admin_insert" on public.concepts;
+create policy "concepts_admin_insert" on public.concepts for insert to authenticated with check (public.is_admin());
+drop policy if exists "concepts_admin_update" on public.concepts;
+create policy "concepts_admin_update" on public.concepts for update to authenticated using (public.is_admin()) with check (public.is_admin());
 
-drop policy if exists "concept_weights_admin_all" on public.concept_weights;
-create policy "concept_weights_admin_all" on public.concept_weights
-  for all to authenticated using (public.is_admin()) with check (public.is_admin());
+-- concept_weights
+drop policy if exists "concept_weights_admin_all"    on public.concept_weights;
+drop policy if exists "concept_weights_admin_select" on public.concept_weights;
+create policy "concept_weights_admin_select" on public.concept_weights for select to authenticated using (public.is_admin());
+drop policy if exists "concept_weights_admin_insert" on public.concept_weights;
+create policy "concept_weights_admin_insert" on public.concept_weights for insert to authenticated with check (public.is_admin());
+drop policy if exists "concept_weights_admin_update" on public.concept_weights;
+create policy "concept_weights_admin_update" on public.concept_weights for update to authenticated using (public.is_admin()) with check (public.is_admin());
 
-drop policy if exists "source_references_admin_all" on public.source_references;
-create policy "source_references_admin_all" on public.source_references
-  for all to authenticated using (public.is_admin()) with check (public.is_admin());
+-- source_references
+drop policy if exists "source_references_admin_all"    on public.source_references;
+drop policy if exists "source_references_admin_select" on public.source_references;
+create policy "source_references_admin_select" on public.source_references for select to authenticated using (public.is_admin());
+drop policy if exists "source_references_admin_insert" on public.source_references;
+create policy "source_references_admin_insert" on public.source_references for insert to authenticated with check (public.is_admin());
+drop policy if exists "source_references_admin_update" on public.source_references;
+create policy "source_references_admin_update" on public.source_references for update to authenticated using (public.is_admin()) with check (public.is_admin());
 
-drop policy if exists "concept_objectives_admin_all" on public.concept_objectives;
-create policy "concept_objectives_admin_all" on public.concept_objectives
-  for all to authenticated using (public.is_admin()) with check (public.is_admin());
+-- concept_objectives
+drop policy if exists "concept_objectives_admin_all"    on public.concept_objectives;
+drop policy if exists "concept_objectives_admin_select" on public.concept_objectives;
+create policy "concept_objectives_admin_select" on public.concept_objectives for select to authenticated using (public.is_admin());
+drop policy if exists "concept_objectives_admin_insert" on public.concept_objectives;
+create policy "concept_objectives_admin_insert" on public.concept_objectives for insert to authenticated with check (public.is_admin());
+drop policy if exists "concept_objectives_admin_update" on public.concept_objectives;
+create policy "concept_objectives_admin_update" on public.concept_objectives for update to authenticated using (public.is_admin()) with check (public.is_admin());
 
-drop policy if exists "lo_source_refs_admin_all" on public.learning_objective_source_references;
-create policy "lo_source_refs_admin_all" on public.learning_objective_source_references
-  for all to authenticated using (public.is_admin()) with check (public.is_admin());
+-- learning_objective_source_references
+drop policy if exists "lo_source_refs_admin_all"    on public.learning_objective_source_references;
+drop policy if exists "lo_source_refs_admin_select" on public.learning_objective_source_references;
+create policy "lo_source_refs_admin_select" on public.learning_objective_source_references for select to authenticated using (public.is_admin());
+drop policy if exists "lo_source_refs_admin_insert" on public.learning_objective_source_references;
+create policy "lo_source_refs_admin_insert" on public.learning_objective_source_references for insert to authenticated with check (public.is_admin());
+drop policy if exists "lo_source_refs_admin_update" on public.learning_objective_source_references;
+create policy "lo_source_refs_admin_update" on public.learning_objective_source_references for update to authenticated using (public.is_admin()) with check (public.is_admin());
 
-drop policy if exists "concept_source_refs_admin_all" on public.concept_source_references;
-create policy "concept_source_refs_admin_all" on public.concept_source_references
-  for all to authenticated using (public.is_admin()) with check (public.is_admin());
+-- concept_source_references
+drop policy if exists "concept_source_refs_admin_all"    on public.concept_source_references;
+drop policy if exists "concept_source_refs_admin_select" on public.concept_source_references;
+create policy "concept_source_refs_admin_select" on public.concept_source_references for select to authenticated using (public.is_admin());
+drop policy if exists "concept_source_refs_admin_insert" on public.concept_source_references;
+create policy "concept_source_refs_admin_insert" on public.concept_source_references for insert to authenticated with check (public.is_admin());
+drop policy if exists "concept_source_refs_admin_update" on public.concept_source_references;
+create policy "concept_source_refs_admin_update" on public.concept_source_references for update to authenticated using (public.is_admin()) with check (public.is_admin());
 
 /*
 === VERIFICATION — run in the Supabase SQL editor / psql after applying 021 ===
@@ -412,12 +474,12 @@ WHERE relnamespace='public'::regnamespace AND relname IN
   'concept_objectives','learning_objective_source_references','concept_source_references')
 ORDER BY relname;   -- relrowsecurity = t for all
 
--- 5. Policies exist (one per table)
-SELECT tablename, policyname, cmd, qual FROM pg_policies
+-- 5. Policies: exactly SELECT/INSERT/UPDATE per table (24 total) and NO DELETE policy
+SELECT cmd, count(*) FROM pg_policies
 WHERE schemaname='public' AND tablename IN
  ('blueprints','learning_objectives','concepts','concept_weights','source_references',
   'concept_objectives','learning_objective_source_references','concept_source_references')
-ORDER BY tablename;
+GROUP BY cmd ORDER BY cmd;   -- expect SELECT=8, INSERT=8, UPDATE=8; NO 'DELETE' row
 
 -- 6a. These should ERROR (domain / state CHECKs reject invalid values or states):
 --   INSERT ... concept_weights (concept_id, cw_state, cw_value) VALUES (<c>, 'assigned', 4);        -- > 3 (domain rejects)
