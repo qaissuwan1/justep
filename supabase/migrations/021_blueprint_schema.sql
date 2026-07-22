@@ -283,8 +283,10 @@ create index if not exists idx_source_refs_lecture on public.source_references (
 
 -- ============================================================================
 -- 6. concept_objectives — pure join (M:N), version-scoped aggregate child
---    DEFERRED TO 022: same-blueprint validation; bidirectional coverage;
---    immutability when the root is approved.
+--    Soft-delete (deleted_at): admins unlink/restore during draft; pair
+--    uniqueness is live-only. DEFERRED TO 022: same-blueprint validation;
+--    bidirectional coverage; immutability when the root is approved (which then
+--    also freezes these link rows).
 -- ============================================================================
 create table if not exists public.concept_objectives (
   id             uuid primary key default gen_random_uuid(),
@@ -296,16 +298,20 @@ create table if not exists public.concept_objectives (
   produced_at    timestamptz not null default now(),
   spec_version   text not null check (btrim(spec_version) <> ''),
   created_by     uuid default auth.uid() references public.profiles (id) on delete set null,
-  constraint concept_objectives_unique unique (concept_id, objective_id)
+  deleted_at     timestamptz    -- P5 soft-delete: admins soft-unlink via UPDATE (no hard DELETE); restore = set NULL
 );
-create index if not exists idx_concept_objectives_concept   on public.concept_objectives (concept_id);
-create index if not exists idx_concept_objectives_objective on public.concept_objectives (objective_id);
+-- Live-only pair uniqueness: a soft-deleted link never blocks a replacement link.
+create unique index if not exists uq_concept_objectives_pair
+  on public.concept_objectives (concept_id, objective_id) where deleted_at is null;
+create index if not exists idx_concept_objectives_concept   on public.concept_objectives (concept_id) where deleted_at is null;
+create index if not exists idx_concept_objectives_objective on public.concept_objectives (objective_id) where deleted_at is null;
 
 -- ============================================================================
 -- 7. learning_objective_source_references — pure join
---    source_reference_id RESTRICT: a source reference cannot be hard-deleted
---    while any objective links it. DEFERRED TO 022: same-lecture validation and
---    the >=1-source-per-active-objective approval minimum.
+--    Soft-delete (deleted_at): admins unlink/restore during draft; pair
+--    uniqueness is live-only. source_reference_id RESTRICT: a source reference
+--    cannot be hard-deleted while any objective links it. DEFERRED TO 022:
+--    same-lecture validation and the >=1-source-per-active-objective minimum.
 -- ============================================================================
 create table if not exists public.learning_objective_source_references (
   id                  uuid primary key default gen_random_uuid(),
@@ -316,15 +322,19 @@ create table if not exists public.learning_objective_source_references (
   produced_at         timestamptz not null default now(),
   spec_version        text not null check (btrim(spec_version) <> ''),
   created_by          uuid default auth.uid() references public.profiles (id) on delete set null,
-  constraint lo_source_refs_unique unique (objective_id, source_reference_id)
+  deleted_at          timestamptz    -- P5 soft-delete: admins soft-unlink via UPDATE; restore = set NULL
 );
-create index if not exists idx_lo_source_refs_objective on public.learning_objective_source_references (objective_id);
-create index if not exists idx_lo_source_refs_source    on public.learning_objective_source_references (source_reference_id);
+-- Live-only pair uniqueness: a soft-deleted link never blocks a replacement link.
+create unique index if not exists uq_lo_source_refs_pair
+  on public.learning_objective_source_references (objective_id, source_reference_id) where deleted_at is null;
+create index if not exists idx_lo_source_refs_objective on public.learning_objective_source_references (objective_id) where deleted_at is null;
+create index if not exists idx_lo_source_refs_source    on public.learning_objective_source_references (source_reference_id) where deleted_at is null;
 
 -- ============================================================================
 -- 8. concept_source_references — pure join
---    DEFERRED TO 022: same-lecture validation; the >=1-source-per-live-concept
---    approval minimum.
+--    Soft-delete (deleted_at): admins unlink/restore during draft; pair
+--    uniqueness is live-only. DEFERRED TO 022: same-lecture validation; the
+--    >=1-source-per-live-concept approval minimum.
 -- ============================================================================
 create table if not exists public.concept_source_references (
   id                  uuid primary key default gen_random_uuid(),
@@ -335,10 +345,13 @@ create table if not exists public.concept_source_references (
   produced_at         timestamptz not null default now(),
   spec_version        text not null check (btrim(spec_version) <> ''),
   created_by          uuid default auth.uid() references public.profiles (id) on delete set null,
-  constraint concept_source_refs_unique unique (concept_id, source_reference_id)
+  deleted_at          timestamptz    -- P5 soft-delete: admins soft-unlink via UPDATE; restore = set NULL
 );
-create index if not exists idx_concept_source_refs_concept on public.concept_source_references (concept_id);
-create index if not exists idx_concept_source_refs_source  on public.concept_source_references (source_reference_id);
+-- Live-only pair uniqueness: a soft-deleted link never blocks a replacement link.
+create unique index if not exists uq_concept_source_refs_pair
+  on public.concept_source_references (concept_id, source_reference_id) where deleted_at is null;
+create index if not exists idx_concept_source_refs_concept on public.concept_source_references (concept_id) where deleted_at is null;
+create index if not exists idx_concept_source_refs_source  on public.concept_source_references (source_reference_id) where deleted_at is null;
 
 -- ============================================================================
 -- Row Level Security — ADMIN-ONLY, and NO hard-delete via RLS.
@@ -495,4 +508,22 @@ GROUP BY cmd ORDER BY cmd;   -- expect SELECT=8, INSERT=8, UPDATE=8; NO 'DELETE'
 --            VALUES (<c>, 'assigned', 2, 'e', 'high');   -- CLW 2 persists (WT-2 correlation rule is a later cross-object gate)
 --   INSERT ... concept_weights (concept_id, clw_state, clw_value, clw_evidence, clw_confidence)
 --            VALUES (<c>, 'assigned', 3, 'e', 'high');   -- CLW 3 persists
+
+-- 7. Soft-delete supported on ALL eight tables (incl. the three join tables)
+SELECT table_name FROM information_schema.columns
+WHERE table_schema='public' AND column_name='deleted_at' AND table_name IN
+ ('blueprints','learning_objectives','concepts','concept_weights','source_references',
+  'concept_objectives','learning_objective_source_references','concept_source_references')
+ORDER BY table_name;   -- expect 8 rows
+
+-- 8. Relationship pair-uniqueness is LIVE-ONLY (partial unique, WHERE deleted_at IS NULL)
+SELECT indexname, indexdef FROM pg_indexes
+WHERE schemaname='public' AND indexname IN
+ ('uq_concept_objectives_pair','uq_lo_source_refs_pair','uq_concept_source_refs_pair')
+ORDER BY indexname;   -- 3 rows, each indexdef ending WHERE (deleted_at IS NULL)
+
+-- 9. Soft-unlink permits a new equivalent live link; duplicate LIVE links are rejected:
+--   UPDATE concept_objectives SET deleted_at = now() WHERE concept_id=<c> AND objective_id=<o>;  -- soft-unlink (allowed)
+--   INSERT concept_objectives (concept_id, objective_id, spec_version) VALUES (<c>,<o>,'v');      -- new live link SUCCEEDS
+--   INSERT concept_objectives (concept_id, objective_id, spec_version) VALUES (<c>,<o>,'v');      -- duplicate LIVE link ERRORS (uq_concept_objectives_pair)
 */
