@@ -203,7 +203,7 @@ create table if not exists public.concept_weights (
   sw_source              text,                                              -- DOC-004 §5: external reference consulted, or an 'unknown' marker
   sw_assigned_by         text check (sw_assigned_by in ('human')),          -- M1: only 'human'; reference_base rejected outright (DOC-004 §5 / WT-3)
   sw_confidence          text check (sw_confidence in ('high','medium','low')),
-  sw_assigned_by_user_id uuid references public.profiles (id) on delete set null,  -- admin identity (X-7)
+  sw_assigned_by_user_id uuid references public.profiles (id) on delete restrict,  -- admin identity (X-7); RESTRICT: an assigned SW's required provenance must not be erased (its sw_state_consistency CHECK forbids NULL). Deactivate users via soft-delete; never hard-delete a referenced provenance identity.
   sw_rationale           text,
   sw_assigned_at         timestamptz,
   sw_blueprint_version   int,
