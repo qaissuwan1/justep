@@ -11,6 +11,9 @@
 --    => students can read only their OWN profile; admins can read all.
 drop policy if exists "profiles_select_authenticated" on public.profiles;
 
+alter table public.profiles
+  add column if not exists avatar_url text;
+
 -- 2. Safe public view — only non-sensitive display columns (NO email, no
 --    streak/progress internals). The view is owned by the migration role
 --    (postgres), and with security_invoker OFF it reads the underlying table

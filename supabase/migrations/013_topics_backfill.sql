@@ -55,7 +55,7 @@ where t.subject_id = q.subject_id
 update public.lectures l
 set topic_id = agg.topic_id
 from (
-  select q.lecture_id, min(q.topic_id) as topic_id
+  select q.lecture_id, (array_agg(q.topic_id))[1] as topic_id
   from public.questions q
   where q.lecture_id is not null
   group by q.lecture_id

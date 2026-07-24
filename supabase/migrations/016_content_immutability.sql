@@ -15,9 +15,28 @@
 --
 -- NOTE ON CONSTRAINT NAMES: the original tables declared these FKs inline, so
 -- Postgres auto-named them `<table>_<column>_fkey`. This migration drops/recreates
--- exactly those names. If `flashcard_reviews` (created out-of-band) used a custom
--- FK name, adjust step 4's DROP to match before running.
+-- exactly those names.
 -- ============================================================================
+
+-- Canonical append-only review log. This object originally existed only as
+-- remote schema drift; defining it here makes a fresh migration chain
+-- reproducible. Migration 017 builds analytics on reviewed_at.
+create table if not exists public.flashcard_reviews (
+  id            uuid primary key default gen_random_uuid(),
+  user_id       uuid not null,
+  flashcard_id  uuid,
+  rating        text not null,
+  interval_days integer,
+  ease_factor   numeric,
+  next_review   timestamptz,
+  reviewed_at   timestamptz not null default now(),
+  constraint flashcard_reviews_user_id_fkey
+    foreign key (user_id) references public.profiles (id) on delete cascade,
+  constraint flashcard_reviews_flashcard_id_fkey
+    foreign key (flashcard_id) references public.flashcards (id) on delete set null,
+  constraint flashcard_reviews_rating_check
+    check (rating in ('again', 'hard', 'good', 'easy'))
+);
 
 -- 1. user_progress.question_id : CASCADE -> SET NULL --------------------------
 -- Keep the attempt (is_correct, time_spent, selected_answer) even if the
