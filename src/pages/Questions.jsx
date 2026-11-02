@@ -172,6 +172,48 @@ export default function Questions() {
     };
   }, [phase]);
 
+  /* ---------------- generate block ---------------- */
+  async function startBlock(ids, n) {
+    setSetupError("");
+    if (!ids.length) {
+      setSetupError("No questions match your filters.");
+      return;
+    }
+    const parsed = parseInt(n, 10);
+    const take = Math.min(Math.max(1, Number.isNaN(parsed) ? 1 : parsed), ids.length);
+    setStarting(true);
+    const chosenIds = shuffle(ids).slice(0, take);
+    const { data, error } = await supabase.from("questions").select("*").in("id", chosenIds).is("deleted_at", null);
+    setStarting(false);
+    if (error || !data || data.length === 0) {
+      setSetupError("Could not load questions. Try again.");
+      return;
+    }
+    const chosen = shuffle(data);
+    const flags = {};
+    chosen.forEach((q) => {
+      if (marks.has(q.id)) flags[q.id] = true;
+    });
+    const active = Object.entries(status).filter(([, v]) => v).map(([k]) => cap(k));
+    setPoolLabel(active.length === 1 ? active[0] : active.length ? "Custom" : "Custom");
+    setTestId((typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : String(Math.random())).slice(0, 8));
+    setQuestions(chosen);
+    setIdx(0);
+    setSelected({});
+    setSubmitted({});
+    setStruck({});
+    setFlagged(flags);
+    setHighlights({});
+    setTimeSpent({});
+    setAnswerSecs({});
+    persistedRef.current = new Set();
+    setElapsed(0);
+    setReviewMode(false);
+    omittedDoneRef.current = false;
+    if (mode === "timed") setTimeLeft(chosen.length * SECONDS_PER_Q);
+    setPhase("running");
+  }
+
   /* ---------------- deep-link: auto-start "incorrect" review ----------------
      When arriving via /app/questions?mode=incorrect, the status filter is
      already incorrect-only (see status init). Once the setup load resolves,
@@ -236,60 +278,18 @@ export default function Questions() {
     liveRef.current = { questions, selected, submitted, reviewMode, userQ };
   });
 
-  /* ---------------- generate block ---------------- */
-  async function startBlock(ids, n) {
-    setSetupError("");
-    if (!ids.length) {
-      setSetupError("No questions match your filters.");
-      return;
-    }
-    const parsed = parseInt(n, 10);
-    const take = Math.min(Math.max(1, Number.isNaN(parsed) ? 1 : parsed), ids.length);
-    setStarting(true);
-    const chosenIds = shuffle(ids).slice(0, take);
-    const { data, error } = await supabase.from("questions").select("*").in("id", chosenIds).is("deleted_at", null);
-    setStarting(false);
-    if (error || !data || data.length === 0) {
-      setSetupError("Could not load questions. Try again.");
-      return;
-    }
-    const chosen = shuffle(data);
-    const flags = {};
-    chosen.forEach((q) => {
-      if (marks.has(q.id)) flags[q.id] = true;
-    });
-    const active = Object.entries(status).filter(([, v]) => v).map(([k]) => cap(k));
-    setPoolLabel(active.length === 1 ? active[0] : active.length ? "Custom" : "Custom");
-    setTestId((typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : String(Math.random())).slice(0, 8));
-    setQuestions(chosen);
-    setIdx(0);
-    setSelected({});
-    setSubmitted({});
-    setStruck({});
-    setFlagged(flags);
-    setHighlights({});
-    setTimeSpent({});
-    setAnswerSecs({});
-    persistedRef.current = new Set();
-    setElapsed(0);
-    setReviewMode(false);
-    omittedDoneRef.current = false;
-    if (mode === "timed") setTimeLeft(chosen.length * SECONDS_PER_Q);
-    setPhase("running");
-  }
-
   /* ---------------- answering ---------------- */
   const qid = current?.id;
   const answered = qid != null && submitted[qid];
   const reveal = reviewMode || (mode === "tutor" && answered);
 
   const selectOption = (id, optIdx) => {
-    if (submitted[id] || reviewMode) return;
+    if (submitted[id] || reviewMode || pendingWrites.current.has(id) || persistedRef.current.has(id) || finishingRef.current) return;
     setSelected((s) => ({ ...s, [id]: optIdx }));
   };
 
   const toggleStrike = (id, optIdx) => {
-    if (submitted[id] || reviewMode) return;
+    if (submitted[id] || reviewMode || pendingWrites.current.has(id) || persistedRef.current.has(id) || finishingRef.current) return;
     setStruck((s) => {
       const set = new Set(s[id] || []);
       set.has(optIdx) ? set.delete(optIdx) : set.add(optIdx);
@@ -301,6 +301,8 @@ export default function Questions() {
   // uninterrupted view (the timer effect only flushes accumulated time on leave).
   const answerTime = (id) => {
     const base = timeSpent[id] || 0;
+    // Invoked only by the save event handler, never while rendering.
+    // eslint-disable-next-line react-hooks/purity
     const live = qStartRef.current ? Math.max(0, Math.round((Date.now() - qStartRef.current) / 1000)) : 0;
     return base + live;
   };

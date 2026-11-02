@@ -196,6 +196,7 @@ export default function StudyDashboard() {
 
   return (
     <Shell isMobile={isMobile}>
+      <header className="workspace-heading"><span className="eyebrow">YOUR STUDY SPACE</span><h1>A little progress. Every day.</h1><p>Your subjects, focused practice, and the next step in your learning.</p></header>
       {/* TOP BAR */}
       <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "2px 4px 6px", flexWrap: "wrap", gap: 10 }}>
         <span style={{ fontSize: 13.5, color: MUTED, fontWeight: 450, letterSpacing: "-0.01em" }}>
@@ -219,7 +220,7 @@ export default function StudyDashboard() {
           <div style={{ fontSize: 26, fontWeight: 600, letterSpacing: "-0.025em", color: INK }}>
             {summary.total_tasks} task{summary.total_tasks === 1 ? "" : "s"} · {fmtMins(summary.total_minutes)}
           </div>
-          <div style={{ fontSize: 13.5, color: MUTED, marginTop: 5, fontWeight: 450 }}>The system picked these for you.</div>
+          <div style={{ fontSize: 13.5, color: MUTED, marginTop: 5, fontWeight: 450 }}>Your study plan, based on your recent activity.</div>
           <div style={{ display: "flex", alignItems: "center", gap: 11, marginTop: 18, maxWidth: 340 }}>
             <div style={{ flex: 1, height: 6, background: "#EEEEF0", borderRadius: 999, overflow: "hidden" }}>
               <div style={{ height: "100%", background: BLUE, borderRadius: 999, transition: "width .35s ease", width: `${progressPct}%` }} />
@@ -231,7 +232,7 @@ export default function StudyDashboard() {
           {canResume && (
             <button onClick={resumeSession} style={btnPrimary}>Resume session</button>
           )}
-          <button onClick={startSession} style={canResume ? btnGhost : btnPrimary}>Start session</button>
+          <button onClick={startSession} disabled={!total} style={{...(canResume ? btnGhost : btnPrimary), opacity:total?1:0.5, cursor:total?"pointer":"not-allowed"}}>Start session</button>
         </div>
       </section>
 
@@ -376,7 +377,7 @@ export default function StudyDashboard() {
 /* ---------------- layout + reusable bits ---------------- */
 function Shell({ children, isMobile }) {
   return (
-    <div style={{ background: "#F6F6F7", fontFamily: FONT, color: INK, minHeight: "100%", margin: isMobile ? "-72px -16px -28px" : "-32px -36px", padding: isMobile ? "32px 16px 48px" : "40px 24px 64px", WebkitFontSmoothing: "antialiased" }}>
+    <div style={{ background: "#F5F4EF", fontFamily: FONT, color: INK, minHeight: "100%", margin: isMobile ? "0 -16px -28px" : "-32px -36px", padding: isMobile ? "32px 16px 48px" : "40px 24px 64px", WebkitFontSmoothing: "antialiased" }}>
       <div style={{ maxWidth: 880, margin: "0 auto", display: "flex", flexDirection: "column", gap: 16 }}>{children}</div>
     </div>
   );
