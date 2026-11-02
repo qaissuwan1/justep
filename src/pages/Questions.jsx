@@ -13,8 +13,8 @@ import { goToNextTask } from "../lib/session";
 
 const NAVY = "#0F172A";
 const NAVY_2 = "#1E293B";
-const BLUE = "#2563EB";
-const BLUE_SOFT = "#EFF4FF";
+const BLUE = "#287666";
+const BLUE_SOFT = "#EAF1EB";
 const GREEN = "#16A34A";
 const GREEN_SOFT = "#ECFDF3";
 const RED = "#DC2626";
@@ -26,7 +26,7 @@ const TEAL_SOFT = "#F0FDFA";
 const BORDER = "#E2E8F0";
 const TEXT = "#0F172A";
 const MUTED = "#64748B";
-const HEAD = "#1a2b4a"; // section-header navy
+const HEAD = "#193B35"; // section-header navy
 const PILL_BORDER = "#BFD7F5"; // count-pill light-blue border
 
 const LETTERS = ["A", "B", "C", "D", "E"];
@@ -68,8 +68,8 @@ export default function Questions() {
 
   /* -------- setup selections -------- */
   const [pickedSystems, setPickedSystems] = useState([]);
-  const [pickedSubjects, setPickedSubjects] = useState([]);
-  const [pickedLectures, setPickedLectures] = useState([]);
+  const [pickedSubjects, setPickedSubjects] = useState(() => searchParams.get("subject") ? [searchParams.get("subject")] : []);
+  const [pickedLectures, setPickedLectures] = useState(() => searchParams.get("lecture") ? [searchParams.get("lecture")] : []);
   const [status, setStatus] = useState(() =>
     incorrectMode
       ? { unused: false, incorrect: true, correct: false, marked: false, omitted: false }
@@ -79,6 +79,9 @@ export default function Questions() {
   const [mode, setMode] = useState("tutor"); // tutor | timed
   const [starting, setStarting] = useState(false);
   const [setupError, setSetupError] = useState("");
+  const [saveError, setSaveError] = useState("");
+  const pendingWrites = useRef(new Map());
+  const finishingRef = useRef(false);
   const [noIncorrect, setNoIncorrect] = useState(false); // incorrect-mode deep-link: empty pool
   const [bannerDismissed, setBannerDismissed] = useState(false);
 
@@ -308,35 +311,34 @@ export default function Questions() {
   // time_spent (fast+correct = confident, slow = hesitant, fast+wrong = misconception).
   async function persistAttempt(q) {
     if (!q || persistedRef.current.has(q.id)) return;
-    persistedRef.current.add(q.id);
-    const t = answerTime(q.id); // time-to-answer, computed once and frozen at submit
-    setAnswerSecs((a) => ({ ...a, [q.id]: t })); // same value the UI displays
-    const row = {
-      question_id: q.id,
-      is_correct: selected[q.id] === q.correct_answer,
-      selected_answer: selected[q.id] ?? null,
-      time_spent_seconds: t,
-      confidence: null,
-    };
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (user) await supabase.from("user_progress").insert({ user_id: user.id, ...row });
+    if (pendingWrites.current.has(q.id)) return pendingWrites.current.get(q.id);
+    const write = (async () => {
+      const t = answerTime(q.id);
+      const { data: { user }, error: authError } = await supabase.auth.getUser();
+      if (authError || !user) throw new Error("Please sign in again before saving your answers.");
+      const { error } = await supabase.from("user_progress").insert({ user_id: user.id, question_id: q.id, is_correct: selected[q.id] === q.correct_answer, selected_answer: selected[q.id] ?? null, time_spent_seconds: t, confidence: null });
+      if (error) throw error;
+      persistedRef.current.add(q.id);
+      setAnswerSecs(a => ({...a, [q.id]:t}));
+    })();
+    pendingWrites.current.set(q.id, write);
+    try { await write; } finally { pendingWrites.current.delete(q.id); }
   }
 
   async function submitAnswer() {
     const q = current;
-    if (q == null || selected[q.id] == null || submitted[q.id]) return;
-    setSubmitted((s) => ({ ...s, [q.id]: true }));
-    await persistAttempt(q); // both modes; tutor reveals immediately
+    if (!q || selected[q.id] == null || submitted[q.id] || pendingWrites.current.has(q.id)) return;
+    setSaveError("");
+    try {
+      await persistAttempt(q);
+      setSubmitted(s => ({...s, [q.id]:true}));
+    } catch { setSaveError("Your answer could not be saved. Check your connection and press Submit again."); }
   }
 
-  // Safety net: if a submitted question is somehow left unwritten, persist it on
-  // navigation. persistedRef makes this a no-op once it's already been written.
   function flushCurrent() {
     if (reviewMode) return;
     const q = current;
-    if (q && submitted[q.id] && !persistedRef.current.has(q.id)) persistAttempt(q);
+    if (q && submitted[q.id] && !persistedRef.current.has(q.id)) persistAttempt(q).catch(() => setSaveError("Your answer could not be saved. Please try again."));
   }
 
   // Flag/Mark — persists to question_marks so the "Marked" filter is real.
@@ -395,29 +397,39 @@ export default function Questions() {
   async function recordOmitted() {
     const live = liveRef.current;
     if (live.reviewMode || omittedDoneRef.current) return;
-    omittedDoneRef.current = true;
+
     // Dedupe: skip questions whose latest attempt is already null (status
     // "omitted") so repeated skipping doesn't pile up duplicate null rows.
     const alreadyOmitted = new Set((live.userQ || []).filter((q) => q.status === "omitted").map((q) => q.id));
     const omittedIds = live.questions
       .filter((q) => live.selected[q.id] == null && !live.submitted[q.id] && !alreadyOmitted.has(q.id))
       .map((q) => q.id);
-    if (!omittedIds.length) return;
+    if (!omittedIds.length) { omittedDoneRef.current = true; return; }
     const {
       data: { user },
     } = await supabase.auth.getUser();
-    if (!user) return;
-    await supabase
+    if (!user) throw new Error("Sign in to save your block.");
+    const { error } = await supabase
       .from("user_progress")
       .insert(omittedIds.map((qid) => ({ user_id: user.id, question_id: qid, is_correct: null })));
+    if (error) throw error;
+    omittedDoneRef.current = true;
   }
 
-  function finishBlock() {
+  async function finishBlock() {
+    if (finishingRef.current) return;
+    finishingRef.current = true;
     clearInterval(timerRef.current);
-    flushCurrent(); // persist a submitted-but-unrated current question
-    recordOmitted();
-    setReviewMode(false);
-    setPhase("summary");
+    setSaveError("");
+    try {
+      if (!reviewMode) {
+        for (const q of questions) if (selected[q.id] != null) await persistAttempt(q);
+        await recordOmitted();
+      }
+      setReviewMode(false);
+      setPhase("summary");
+    } catch { setSaveError("Your block could not be fully saved. Check your connection and press End Block to retry."); }
+    finally { finishingRef.current = false; }
   }
   // Keep finishRef pointing at the current finishBlock for the timed-mode timer.
   useEffect(() => {
@@ -510,7 +522,8 @@ export default function Questions() {
   return (
     <>
       {sessionMode && <SessionBar />}
-      <div style={{ position: "fixed", top: sessionMode ? SESSION_BAR_H : 0, left: 0, right: 0, bottom: 0, zIndex: 1000, background: "#F8FAFC", display: "flex", flexDirection: "column", color: TEXT }}>
+      <div style={{ position: "fixed", top: sessionMode ? SESSION_BAR_H : 0, left: 0, right: 0, bottom: 0, zIndex: 1000, background: "#F5F4EF", display: "flex", flexDirection: "column", color: TEXT }}>
+      {saveError && <div role="alert" style={{background:"#FEF2F2",color:"#991B1B",padding:14}}>{saveError}</div>}
       {/* TOP BAR */}
       <div style={{ background: NAVY, color: "#fff", padding: "8px 16px", display: "flex", alignItems: "center", gap: isMobile ? 8 : 16, flexShrink: 0, flexWrap: isMobile ? "wrap" : "nowrap" }}>
         <div style={{ background: NAVY_2, borderRadius: 8, padding: "6px 12px", fontWeight: 700, fontSize: 14 }}>
@@ -835,8 +848,8 @@ function ResultCell({ label, value, color, big, last }) {
 /* ================================================================== */
 function Setup(props) {
   const {
-    loadingMeta, noIncorrect, sessionMode, onNextTask, systems, subjects, lectures, userQ, marks,
-    pickedSystems, setPickedSystems,
+    loadingMeta, noIncorrect, sessionMode, onNextTask, subjects, lectures, userQ, marks,
+    pickedSystems,
     pickedSubjects, setPickedSubjects,
     pickedLectures, setPickedLectures,
     status, setStatus,
@@ -849,17 +862,6 @@ function Setup(props) {
   const toggleStatus = (k) => setStatus((s) => ({ ...s, [k]: !s[k] }));
 
   // cascading toggles with locking + child-clearing
-  const toggleSystem = (id) => {
-    if (pickedSystems.includes(id)) {
-      const remSub = subjects.filter((s) => s.system_id === id).map((s) => s.id);
-      const remLec = lectures.filter((l) => remSub.includes(l.subject_id)).map((l) => l.id);
-      setPickedSystems(pickedSystems.filter((x) => x !== id));
-      setPickedSubjects(pickedSubjects.filter((sid) => !remSub.includes(sid)));
-      setPickedLectures(pickedLectures.filter((lid) => !remLec.includes(lid)));
-    } else {
-      setPickedSystems([...pickedSystems, id]);
-    }
-  };
   const toggleSubject = (id) => {
     if (pickedSubjects.includes(id)) {
       const remLec = lectures.filter((l) => l.subject_id === id).map((l) => l.id);
@@ -903,7 +905,7 @@ function Setup(props) {
     if (q.lecture_id) lecCount[q.lecture_id] = (lecCount[q.lecture_id] || 0) + 1;
   });
 
-  const shownSubjects = subjects.filter((s) => pickedSystems.includes(s.system_id));
+  const shownSubjects = subjects;
   const shownLectures = lectures.filter((l) => pickedSubjects.includes(l.subject_id));
 
   const finalPool = userQ.filter((q) => cascade(q) && passStatus(q));
@@ -916,15 +918,12 @@ function Setup(props) {
   };
   const take = clampNum(numQuestions);
 
-  const subjectsLocked = pickedSystems.length === 0;
+  const subjectsLocked = false;
   const lecturesLocked = pickedSubjects.length === 0;
 
   // master (select-all) checkboxes per cascading section
-  const sysAllOn = systems.length > 0 && pickedSystems.length === systems.length;
   const subAllOn = shownSubjects.length > 0 && pickedSubjects.length === shownSubjects.length;
   const lecAllOn = shownLectures.length > 0 && pickedLectures.length === shownLectures.length;
-  const toggleSysMaster = () =>
-    sysAllOn ? toggleSystemClearAll(setPickedSystems, setPickedSubjects, setPickedLectures) : setPickedSystems(systems.map((s) => s.id));
   const toggleSubMaster = () => {
     if (subAllOn) {
       setPickedSubjects([]);
@@ -934,7 +933,7 @@ function Setup(props) {
   const toggleLecMaster = () => (lecAllOn ? setPickedLectures([]) : setPickedLectures(shownLectures.map((l) => l.id)));
 
   return (
-    <div style={{ minHeight: "100vh", background: "#F8FAFC", color: TEXT }}>
+    <div style={{ minHeight: "100vh", background: "#F5F4EF", color: TEXT }}>
       <div style={{ maxWidth: 920, margin: "0 auto", padding: isMobile ? "20px 14px 120px" : "32px 20px 110px" }}>
         <h1 style={{ fontSize: 26, margin: "0 0 4px" }}>Create Test</h1>
         <p style={{ color: MUTED, margin: "0 0 28px", fontSize: 14 }}>Build a custom question block.</p>
@@ -973,23 +972,12 @@ function Setup(props) {
             </Section>
 
             {/* 3. CASCADING */}
-            <Section title="Systems" master={{ on: sysAllOn, onToggle: toggleSysMaster }}>
-              {systems.length === 0 ? (
-                <Empty>No systems configured yet.</Empty>
-              ) : (
-                <Grid single={isMobile}>
-                  {systems.map((s) => (
-                    <CheckRow key={s.id} on={pickedSystems.includes(s.id)} onClick={() => toggleSystem(s.id)} label={s.name} count={sysCount[s.id] || 0} />
-                  ))}
-                </Grid>
-              )}
-            </Section>
 
             <Section title="Subjects" locked={subjectsLocked} master={{ on: subAllOn, onToggle: toggleSubMaster, disabled: subjectsLocked }}>
               {subjectsLocked ? (
-                <Locked>Select a system first.</Locked>
+                <Locked>Select a subject.</Locked>
               ) : shownSubjects.length === 0 ? (
-                <Empty>No subjects for the selected systems.</Empty>
+                <Empty>No subjects available yet.</Empty>
               ) : (
                 <Grid single={isMobile}>
                   {shownSubjects.map((s) => (
@@ -1051,11 +1039,7 @@ function Setup(props) {
   );
 }
 
-function toggleSystemClearAll(setSys, setSub, setLec) {
-  setSys([]);
-  setSub([]);
-  setLec([]);
-}
+
 
 /* ---- setup sub-components ---- */
 function Section({ title, children, locked, master, totalPill }) {
@@ -1180,7 +1164,7 @@ function Results({ questions, selected, flagged, answerSecs, elapsed, mode, pool
   const scoreColor = pct >= 70 ? GREEN : pct >= 50 ? AMBER : RED;
 
   return (
-    <div style={{ minHeight: "100vh", background: "#F8FAFC", padding: "32px 20px" }}>
+    <div style={{ minHeight: "100vh", background: "#F5F4EF", padding: "32px 20px" }}>
       <div style={{ maxWidth: 1000, margin: "0 auto" }}>
         {/* header */}
         <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 20, flexWrap: "wrap" }}>
@@ -1229,7 +1213,7 @@ function Results({ questions, selected, flagged, answerSecs, elapsed, mode, pool
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                   <thead>
                     <tr style={{ background: "#F8FAFF", textAlign: "left" }}>
-                      {["#", "Id", "Subject", "System", "Topic", "Result", "Time"].map((h) => (
+                      {["#", "Id", "Subject", "Topic", "Result", "Time"].map((h) => (
                         <th key={h} style={{ padding: "10px 14px", fontSize: 11, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: "0.04em" }}>{h}</th>
                       ))}
                     </tr>

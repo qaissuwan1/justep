@@ -10,7 +10,7 @@ import Privacy from "./pages/Privacy";
 import Terms from "./pages/Terms";
 import StudyDashboard from "./pages/StudyDashboard";
 import Questions from "./pages/Questions";
-import Flashcards from "./pages/Flashcards";
+import FlashcardsComingSoon from "./pages/FlashcardsComingSoon";
 import Subjects from "./pages/Subjects";
 import Leaderboard from "./pages/Leaderboard";
 import Profile from "./pages/Profile";
@@ -55,7 +55,7 @@ export default function App() {
           <Route path="home" element={<StudyDashboard />} />
           <Route path="dashboard" element={<StudyDashboard />} />
           <Route path="questions" element={<Questions />} />
-          <Route path="flashcards" element={<Flashcards />} />
+          <Route path="flashcards" element={<FlashcardsComingSoon />} />
           <Route path="subjects" element={<Subjects />} />
           <Route path="leaderboard" element={<Leaderboard />} />
           <Route path="profile" element={<Profile />} />

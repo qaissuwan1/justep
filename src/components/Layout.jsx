@@ -5,13 +5,14 @@ import { useEffect, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { colors, gradients, font } from "../theme";
 import { supabase } from "../lib/supabase";
+import "./Workspace.css";
 import useIsMobile from "../lib/useIsMobile";
 
 const navItems = [
-  { to: "/app/home", icon: "⊞", label: "Dashboard" },
-  { to: "/app/questions", icon: "☰", label: "Question Bank" },
+  { to: "/app/home", icon: "⊞", label: "Overview" },
+  { to: "/app/questions", icon: "☰", label: "Practice" },
   { to: "/app/flashcards", icon: "▣", label: "Flashcards" },
-  { to: "/app/subjects", icon: "◈", label: "Library" },
+  { to: "/app/subjects", icon: "◈", label: "My subjects" },
   { to: "/app/leaderboard", icon: "≡", label: "Leaderboard" },
   { to: "/app/profile", icon: "○", label: "Profile" },
 ];
@@ -26,8 +27,8 @@ const navLinkStyle = ({ isActive }) => ({
   borderRadius: 10,
   marginBottom: 4,
   textDecoration: "none",
-  background: isActive ? "rgba(79,142,247,0.18)" : "transparent",
-  color: isActive ? colors.blue : "rgba(255,255,255,0.55)",
+  background: isActive ? "rgba(255,255,255,0.12)" : "transparent",
+  color: isActive ? "#E8F0D5" : "rgba(255,255,255,0.55)",
   fontSize: 14,
   fontWeight: isActive ? 600 : 400,
   transition: "all 0.15s",
@@ -70,7 +71,7 @@ export default function Layout() {
   const fullName = user?.user_metadata?.full_name;
 
   return (
-    <div style={{ fontFamily: font, background: colors.bg, minHeight: "100vh", display: "flex", color: colors.text }}>
+    <div className="study-workspace" style={{ fontFamily: font, background: colors.bg, minHeight: "100vh", display: "flex", color: colors.text }}>
       {/* Mobile top bar */}
       {isMobile && (
         <header

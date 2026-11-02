@@ -39,7 +39,7 @@ export default function ImportJson() {
 
   useEffect(() => {
     (async () => {
-      const { data } = await supabase.from("subjects").select("id,name").order("name");
+      const { data } = await supabase.from("subjects").select("id,name").is("deleted_at", null).order("name");
       setSubjects(data || []);
     })();
   }, []);
@@ -94,6 +94,9 @@ export default function ImportJson() {
       return;
     }
 
+    if (!json || typeof json !== "object") { setErrors(["Expected a JSON object or an array of questions."]); return; }
+    if ((!Array.isArray(json) && json.questions !== undefined && !Array.isArray(json.questions)) || (json.flashcards !== undefined && !Array.isArray(json.flashcards))) { setErrors(["questions and flashcards must be arrays."]); return; }
+    if (json.flashcards?.length) { setErrors(["Flashcards are currently paused. Import questions only."]); return; }
     // Accept either { questions, flashcards } or a bare array of questions
     let questions;
     let flashcards = [];
@@ -120,12 +123,12 @@ export default function ImportJson() {
         warns.push(`${where}: skipped (needs exactly 5 non-empty options).`);
         return;
       }
-      const ca = Number(q.correct_answer);
+      const ca = typeof q.correct_answer === "number" ? q.correct_answer : NaN;
       if (!Number.isInteger(ca) || ca < 0 || ca > 4) {
         warns.push(`${where}: skipped (correct_answer must be 0-4).`);
         return;
       }
-      let diff = (q.difficulty || "medium").toLowerCase();
+      let diff = String(q.difficulty || "medium").toLowerCase();
       if (!DIFFICULTIES.includes(diff)) diff = "medium";
       validQuestions.push({
         topic: q.topic ? String(q.topic) : null,
@@ -180,11 +183,12 @@ export default function ImportJson() {
 
       // dedup questions by stem within this subject
       if (parsed.questions.length) {
-        const { data: existing } = await supabase
+        const { data: existing, error: existingError } = await supabase
           .from("questions")
           .select("stem")
           .eq("subject_id", subjectId)
           .is("deleted_at", null);
+        if (existingError) throw existingError;
         const existingStems = new Set((existing || []).map((e) => e.stem.trim().toLowerCase()));
 
         const toInsert = [];
@@ -192,6 +196,7 @@ export default function ImportJson() {
           if (existingStems.has(q.stem.trim().toLowerCase())) {
             qSkipped++;
           } else {
+            existingStems.add(q.stem.trim().toLowerCase());
             toInsert.push({
               subject_id: subjectId,
               lecture_id: lectureId || null,
@@ -249,7 +254,7 @@ export default function ImportJson() {
     <div style={{ fontFamily: font, color: colors.text }}>
       <h1 style={{ fontSize: 24, margin: "0 0 4px" }}>Import JSON</h1>
       <p style={{ color: colors.textSoft, margin: "0 0 24px", fontSize: 14 }}>
-        Paste questions and flashcards JSON (generated in Claude) and publish them straight to the bank — no API cost.
+        Validate your question file, review the results, then publish to your selected subject. Flashcards are currently paused.
       </p>
 
       {/* subject + lecture */}

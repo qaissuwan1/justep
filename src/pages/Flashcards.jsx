@@ -76,7 +76,7 @@ function intervalLabel(rating, progress, examDate) {
 }
 
 /* light + dark tokens */
-const L = { bg:"#F8FAFC", panel:"#EEF1F8", card:"#FFFFFF", text:"#0F172A", muted:"#64748B", border:"#E2E8F0", chip:"#FFFFFF" };
+const L = { bg:"#F5F4EF", panel:"#EEF1F8", card:"#FFFFFF", text:"#0F172A", muted:"#64748B", border:"#E2E8F0", chip:"#FFFFFF" };
 const D = { bg:"#0F1115", panel:"#15181E", card:"#1A1D23", text:"#F3F4F6", muted:"#9CA3AF", border:"#262A33", chip:"#1A1D23" };
 
 const RATE = [
@@ -113,15 +113,15 @@ export default function Flashcards() {
   const [reloadKey, setReloadKey] = useState(0);
   const [userId, setUserId] = useState(null);
 
-  const [systems, setSystems] = useState([]);
+  const [, setSystems] = useState([]);
   const [allSubjects, setAllSubjects] = useState([]);
   const [allLectures, setAllLectures] = useState([]);
   const [cardPool, setCardPool] = useState([]);
 
   // setup selections — empty content arrays mean "all", matching Questions.
-  const [pickedSystems, setPickedSystems] = useState([]);
-  const [pickedSubjects, setPickedSubjects] = useState([]);
-  const [pickedLectures, setPickedLectures] = useState([]);
+  const [pickedSystems] = useState([]);
+  const [pickedSubjects, setPickedSubjects] = useState(() => searchParams.get("subject") ? [searchParams.get("subject")] : []);
+  const [pickedLectures, setPickedLectures] = useState(() => searchParams.get("lecture") ? [searchParams.get("lecture")] : []);
   const [status, setStatus] = useState({ due: true, new: false, learning: false, all: false });
   const [numCards, setNumCards] = useState("40");
   const [starting, setStarting] = useState(false);
@@ -137,10 +137,10 @@ export default function Flashcards() {
   const [stats, setStats] = useState({ again:0, hard:0, good:0, easy:0 });
 
   const t = dark ? D : L;
-  const accent = dark ? "#60A5FA" : "#2563EB";
-  const headColor = dark ? t.text : "#1a2b4a";
+  const accent = dark ? "#60A5FA" : "#287666";
+  const headColor = dark ? t.text : "#193B35";
   const pillBorder = dark ? "#2B3A55" : "#BFD7F5";
-  const selBg = dark ? "#13233b" : "#EFF4FF";
+  const selBg = dark ? "#13233b" : "#EAF1EB";
   const activeCard = queue[idx]?.card;
   const sourceLabel = activeCard?.lectures?.title || activeCard?.topics?.name || activeCard?.subjects?.name;
 
@@ -266,21 +266,6 @@ export default function Flashcards() {
   /* ---- unified setup cascade ---- */
   const toggleStatus = (key) => setStatus((current) => ({ ...current, [key]: !current[key] }));
 
-  const toggleSystem = (id) => {
-    if (pickedSystems.includes(id)) {
-      const removedSubjects = allSubjects.filter((subject) => subject.system_id === id).map((subject) => subject.id);
-      const removedLectures = new Set([
-        ...allLectures.filter((lecture) => removedSubjects.includes(lecture.subject_id)).map((lecture) => lecture.id),
-        ...removedSubjects.map(noLectureKey),
-      ]);
-      setPickedSystems(pickedSystems.filter((systemId) => systemId !== id));
-      setPickedSubjects(pickedSubjects.filter((subjectId) => !removedSubjects.includes(subjectId)));
-      setPickedLectures(pickedLectures.filter((lectureId) => !removedLectures.has(lectureId)));
-    } else {
-      setPickedSystems([...pickedSystems, id]);
-    }
-  };
-
   const toggleSubject = (id) => {
     if (pickedSubjects.includes(id)) {
       const removedLectures = new Set([
@@ -341,7 +326,7 @@ export default function Flashcards() {
     lectureCounts[bucketId] = (lectureCounts[bucketId] || 0) + 1;
   });
 
-  const shownSubjects = allSubjects.filter((subject) => pickedSystems.includes(subject.system_id));
+  const shownSubjects = allSubjects;
   const shownLectures = allLectures.filter((lecture) => pickedSubjects.includes(lecture.subject_id));
   const noLectureOptions = pickedSubjects
     .filter((subjectId) => cardPool.some((item) => item.subject_id === subjectId && !item.lecture_id))
@@ -362,21 +347,11 @@ export default function Flashcards() {
   };
   const selectedCount = clampNum(numCards);
 
-  const subjectsLocked = pickedSystems.length === 0;
+  const subjectsLocked = false;
   const lecturesLocked = pickedSubjects.length === 0;
-  const systemsAllOn = systems.length > 0 && pickedSystems.length === systems.length;
   const subjectsAllOn = shownSubjects.length > 0 && pickedSubjects.length === shownSubjects.length;
   const lecturesAllOn = lectureOptions.length > 0 && pickedLectures.length === lectureOptions.length;
 
-  const toggleSystemsMaster = () => {
-    if (systemsAllOn) {
-      setPickedSystems([]);
-      setPickedSubjects([]);
-      setPickedLectures([]);
-    } else {
-      setPickedSystems(systems.map((system) => system.id));
-    }
-  };
   const toggleSubjectsMaster = () => {
     if (subjectsAllOn) {
       setPickedSubjects([]);
@@ -497,23 +472,11 @@ export default function Flashcards() {
               </div>
             </Section>
 
-            <Section title="Systems" master={{ on: systemsAllOn, onToggle: toggleSystemsMaster }} theme={setupTheme}>
-              {systems.length === 0 ? (
-                <Empty theme={setupTheme}>No systems configured yet.</Empty>
-              ) : (
-                <Grid single={isMobile}>
-                  {systems.map((system) => (
-                    <CheckRow key={system.id} on={pickedSystems.includes(system.id)} onClick={() => toggleSystem(system.id)} label={system.name} count={systemCounts[system.id] || 0} theme={setupTheme} />
-                  ))}
-                </Grid>
-              )}
-            </Section>
-
             <Section title="Subjects" locked={subjectsLocked} master={{ on: subjectsAllOn, onToggle: toggleSubjectsMaster, disabled: subjectsLocked }} theme={setupTheme}>
               {subjectsLocked ? (
-                <Locked theme={setupTheme}>Select a system first.</Locked>
+                <Locked theme={setupTheme}>Select a subject.</Locked>
               ) : shownSubjects.length === 0 ? (
-                <Empty theme={setupTheme}>No subjects for the selected systems.</Empty>
+                <Empty theme={setupTheme}>No subjects available yet.</Empty>
               ) : (
                 <Grid single={isMobile}>
                   {shownSubjects.map((subject) => (
@@ -623,7 +586,7 @@ export default function Flashcards() {
               {sessionMode && (
                 <button onClick={()=>goToNextTask(navigate)} style={{ background:"#16A34A", color:"#fff", border:"none", borderRadius:10, padding:"13px 28px", fontSize:15, fontWeight:700, cursor:"pointer", fontFamily:font }}>Next task →</button>
               )}
-              <button onClick={()=>setPhase("setup")} style={{ background: sessionMode ? "transparent" : "#2563EB", color: sessionMode ? t.text : "#fff", border: sessionMode ? `1px solid ${t.border}` : "none", borderRadius:10, padding:"13px 28px", fontSize:15, fontWeight:700, cursor:"pointer", fontFamily:font }}>Back to home</button>
+              <button onClick={()=>setPhase("setup")} style={{ background: sessionMode ? "transparent" : "#287666", color: sessionMode ? t.text : "#fff", border: sessionMode ? `1px solid ${t.border}` : "none", borderRadius:10, padding:"13px 28px", fontSize:15, fontWeight:700, cursor:"pointer", fontFamily:font }}>Back to home</button>
             </div>
           </div>
         )}

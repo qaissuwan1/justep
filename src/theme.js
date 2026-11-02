@@ -2,14 +2,14 @@
 // Navy blue + teal palette, matching the original dashboard style.
 
 export const colors = {
-  navy: "#1E2A4A",
-  navy2: "#2D4070",
-  bg: "#F0F4FF",
+  navy: "#193B35",
+  navy2: "#285A4F",
+  bg: "#F5F4EF",
   card: "#FFFFFF",
   // teal / blue accents
-  blue: "#4F8EF7",
-  teal: "#38BDF8",
-  tealDeep: "#14B8A6",
+  blue: "#287666",
+  teal: "#79AD91",
+  tealDeep: "#287666",
   // semantic
   green: "#10B981",
   amber: "#F59E0B",
@@ -17,17 +17,17 @@ export const colors = {
   orange: "#F97316",
   purple: "#8B5CF6",
   // text
-  text: "#1E2A4A",
-  textSoft: "#64748B",
-  textMuted: "#94A3B8",
-  line: "#E8EEFF",
+  text: "#193B35",
+  textSoft: "#64756F",
+  textMuted: "#788780",
+  line: "#E1E6DF",
 };
 
 export const gradients = {
-  accent: "linear-gradient(135deg, #4F8EF7, #38BDF8)",
-  accentV: "linear-gradient(180deg, #4F8EF7, #38BDF8)",
-  navy: "linear-gradient(135deg, #1E2A4A 0%, #2D4070 100%)",
-  teal: "linear-gradient(135deg, #14B8A6, #38BDF8)",
+  accent: "linear-gradient(135deg, #287666, #79AD91)",
+  accentV: "linear-gradient(180deg, #287666, #79AD91)",
+  navy: "linear-gradient(135deg, #193B35 0%, #285A4F 100%)",
+  teal: "linear-gradient(135deg, #287666, #79AD91)",
 };
 
 export const font = "'Inter', -apple-system, sans-serif";
@@ -93,10 +93,10 @@ export const mockData = {
   weeklyScore: [65, 70, 58, 80, 75, 88, 72],
   subjects: [
     { name: "Pathology", progress: 68, color: "#3B82F6", questions: 240, cards: 120, mastered: 82 },
-    { name: "Pharmacology", progress: 45, color: "#14B8A6", questions: 180, cards: 95, mastered: 41 },
+    { name: "Pharmacology", progress: 45, color: "#287666", questions: 180, cards: 95, mastered: 41 },
     { name: "Anatomy", progress: 82, color: "#8B5CF6", questions: 310, cards: 200, mastered: 164 },
     { name: "Physiology", progress: 30, color: "#F59E0B", questions: 150, cards: 88, mastered: 26 },
-    { name: "Microbiology", progress: 54, color: "#38BDF8", questions: 210, cards: 140, mastered: 76 },
+    { name: "Microbiology", progress: 54, color: "#79AD91", questions: 210, cards: 140, mastered: 76 },
     { name: "Biochemistry", progress: 61, color: "#EF4444", questions: 175, cards: 110, mastered: 67 },
   ],
   recentTopics: [

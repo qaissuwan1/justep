@@ -15,7 +15,7 @@ const INK2 = "#28282E";
 const MUTED = "#8A8A8F";
 const MUTED2 = "#9A9AA0";
 const FAINT = "#B0B0B6";
-const BLUE = "#2B5CE6";
+const BLUE = "#287666";
 const LINE = "#ECECEE";
 const LINE2 = "#F2F2F4";
 
@@ -23,7 +23,7 @@ const LINE2 = "#F2F2F4";
 const SEV = {
   critical: { label: "Critical", dot: "#E5484D", pillBg: "#FDECEC", pillColor: "#C8313A" },
   high: { label: "High", dot: "#E8920E", pillBg: "#FBF0E1", pillColor: "#B0710D" },
-  medium: { label: "Medium", dot: "#2B7FFF", pillBg: "#E8F1FF", pillColor: "#2563C9" },
+  medium: { label: "Medium", dot: "#287666", pillBg: "#E8F1FF", pillColor: "#2563C9" },
 };
 
 const RING_C = 2 * Math.PI * 38; // circumference for r=38 (matches the design)
@@ -70,7 +70,7 @@ function ringColor(score) {
   if (score == null) return null;
   if (score <= 40) return "#E5484D"; // needs work
   if (score <= 70) return "#E8920E"; // in progress
-  return "#2B7FFF"; // on track
+  return "#287666"; // on track
 }
 
 export default function StudyDashboard() {
@@ -100,19 +100,19 @@ export default function StudyDashboard() {
 
         const now = new Date().toISOString();
         const [profile, streakRows, summary, queue, atRisk, weak, systems] = await Promise.all([
-          supabase.from("profiles").select("full_name,email").eq("id", uid).maybeSingle().then((r) => r.data),
-          supabase.from("user_progress").select("answered_at").eq("user_id", uid).then((r) => r.data || []),
-          supabase.rpc("study_queue_summary", { p_user_id: uid, as_of: now }).then((r) => r.data?.[0] || null),
-          supabase.rpc("get_study_queue", { p_user_id: uid, as_of: now }).then((r) => r.data || []),
-          supabase.rpc("at_risk_topics", { p_user_id: uid, as_of: now }).then((r) => r.data || []),
-          supabase.rpc("weak_concepts", { p_user_id: uid, as_of: now }).then((r) => r.data || []),
+          supabase.from("profiles").select("full_name,email").eq("id", uid).maybeSingle().then((r) => { if (r.error) throw r.error; return r.data; }),
+          supabase.from("user_progress").select("answered_at").eq("user_id", uid).then((r) => { if (r.error) throw r.error; return r.data || []; }),
+          supabase.rpc("study_queue_summary", { p_user_id: uid, as_of: now }).then((r) => { if (r.error) throw r.error; return r.data?.[0] || null; }),
+          supabase.rpc("get_study_queue", { p_user_id: uid, as_of: now }).then((r) => { if (r.error) throw r.error; return r.data || []; }),
+          supabase.rpc("at_risk_topics", { p_user_id: uid, as_of: now }).then((r) => { if (r.error) throw r.error; return r.data || []; }),
+          supabase.rpc("weak_concepts", { p_user_id: uid, as_of: now }).then((r) => { if (r.error) throw r.error; return r.data || []; }),
           (async () => {
-            const { data: sys } = await supabase.from("systems").select("id,name").order("name");
+            const { data: sys } = await supabase.from("subjects").select("id,name").is("deleted_at", null).order("name");
             return Promise.all(
               (sys || []).map(async (s) => {
-                const { data: score } = await supabase.rpc("mastery_system", {
+                const { data: score } = await supabase.rpc("mastery_subject", {
                   p_user_id: uid,
-                  p_system_id: s.id,
+                  p_subject_id: s.id,
                   as_of: now,
                 });
                 return { id: s.id, name: s.name, score: score == null ? null : Number(score) };
@@ -215,7 +215,7 @@ export default function StudyDashboard() {
       {/* TODAY'S PLAN */}
       <section style={{ position: "relative", background: "#fff", border: `1px solid ${LINE}`, borderLeft: `3px solid ${BLUE}`, borderRadius: 12, padding: "22px 24px", display: "flex", alignItems: isMobile ? "stretch" : "center", justifyContent: "space-between", gap: 24, flexDirection: isMobile ? "column" : "row" }}>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 12, fontWeight: 600, color: BLUE, letterSpacing: "0.02em", marginBottom: 9 }}>Today's plan</div>
+          <div style={{ fontSize: 12, fontWeight: 600, color: BLUE, letterSpacing: "0.02em", marginBottom: 9 }}>Your next step</div>
           <div style={{ fontSize: 26, fontWeight: 600, letterSpacing: "-0.025em", color: INK }}>
             {summary.total_tasks} task{summary.total_tasks === 1 ? "" : "s"} · {fmtMins(summary.total_minutes)}
           </div>
@@ -326,9 +326,9 @@ export default function StudyDashboard() {
 
       {/* MASTERY MAP — mastery_system per system */}
       <section style={{ background: "#fff", border: `1px solid ${LINE}`, borderRadius: 12, padding: "20px 24px 22px" }}>
-        <h2 style={{ ...h2, marginBottom: 20 }}>Mastery map</h2>
+        <h2 style={{ ...h2, marginBottom: 20 }}>Your subjects</h2>
         {systems.length === 0 ? (
-          <EmptyRow flush>No systems set up yet.</EmptyRow>
+          <EmptyRow flush>No subjects available yet.</EmptyRow>
         ) : (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))", gap: 16 }}>
             {systems.map((s) => {
@@ -359,7 +359,7 @@ export default function StudyDashboard() {
           {[
             ["#E5484D", "Needs work"],
             ["#E8920E", "In progress"],
-            ["#2B7FFF", "On track"],
+            ["#287666", "On track"],
             ["#D6D6DB", "Not started"],
           ].map(([c, label]) => (
             <span key={label} style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 12, color: MUTED, fontWeight: 450 }}>
