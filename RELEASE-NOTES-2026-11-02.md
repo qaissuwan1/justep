@@ -1,5 +1,11 @@
 # Workspace redesign and content reset
 
+## Follow-up: restored curriculum hierarchy and overall performance
+
+At the user's correction, restored Endocrine and Gastrointestinal plus Systems → Subjects → Lectures navigation in the library, test builder and admin. Questions and flashcards remain archived. Added `/app/performance`, inspired by the public UWorld overall-performance layout, with real user-only historical attempt counts and current published-bank usage. Unrecorded answer-change, test-count and peer-ranking metrics show unavailable states. Pagination prevents the first 1,000 rows from silently truncating the new metrics. Unit tests cover empty datasets, archived history, repeated attempts and unique active-bank usage.
+
+The earlier notes below describe the initial release; the Systems removal was superseded by this follow-up.
+
 - New cream and forest green landing page, shared theme, subject browser and responsive admin layout.
 - Systems navigation removed; existing subject relationships retained.
 - Student flashcard route now shows Coming soon, including direct and session links.

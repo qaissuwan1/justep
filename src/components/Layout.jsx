@@ -2,7 +2,7 @@
 // Desktop: fixed 220px sidebar. Mobile (<=768px): sidebar becomes a slide-in
 // drawer behind a hamburger top bar, and main content goes full-width.
 import { useEffect, useState } from "react";
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { NavLink, Outlet, useNavigate, useLocation } from "react-router-dom";
 import { colors, gradients, font } from "../theme";
 import { supabase } from "../lib/supabase";
 import "./Workspace.css";
@@ -10,9 +10,10 @@ import useIsMobile from "../lib/useIsMobile";
 
 const navItems = [
   { to: "/app/home", icon: "⊞", label: "Overview" },
-  { to: "/app/questions", icon: "☰", label: "Practice" },
+  { to: "/app/questions", icon: "☰", label: "Create Test" },
+  { to: "/app/performance", icon: "◴", label: "Performance" },
   { to: "/app/flashcards", icon: "▣", label: "Flashcards" },
-  { to: "/app/subjects", icon: "◈", label: "My subjects" },
+  { to: "/app/subjects", icon: "◈", label: "Systems & Subjects" },
   { to: "/app/leaderboard", icon: "≡", label: "Leaderboard" },
   { to: "/app/profile", icon: "○", label: "Profile" },
 ];
@@ -36,6 +37,7 @@ const navLinkStyle = ({ isActive }) => ({
 
 export default function Layout() {
   const navigate = useNavigate();
+  const isPerformance = useLocation().pathname === "/app/performance";
   const isMobile = useIsMobile();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const closeDrawer = () => setDrawerOpen(false);
@@ -71,7 +73,7 @@ export default function Layout() {
   const fullName = user?.user_metadata?.full_name;
 
   return (
-    <div className="study-workspace" style={{ fontFamily: font, background: colors.bg, minHeight: "100vh", display: "flex", color: colors.text }}>
+    <div className={`study-workspace${isPerformance ? " performance-shell" : ""}`} style={{ fontFamily: font, background: colors.bg, minHeight: "100vh", display: "flex", color: colors.text }}>
       {/* Mobile top bar */}
       {isMobile && (
         <header

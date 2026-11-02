@@ -14,6 +14,7 @@ import FlashcardsComingSoon from "./pages/FlashcardsComingSoon";
 import Subjects from "./pages/Subjects";
 import Leaderboard from "./pages/Leaderboard";
 import Profile from "./pages/Profile";
+import Performance from "./pages/Performance";
 import Admin from "./pages/Admin";
 import { colors, font, gradients } from "./theme";
 
@@ -59,6 +60,7 @@ export default function App() {
           <Route path="subjects" element={<Subjects />} />
           <Route path="leaderboard" element={<Leaderboard />} />
           <Route path="profile" element={<Profile />} />
+          <Route path="performance" element={<Performance />} />
           <Route path="admin" element={<Admin />} />
         </Route>
 

@@ -16,6 +16,7 @@ import { useTopics } from "../lib/useTopics";
 const ADMIN_EMAILS = ["hasansuwan@outlook.com", "qais@ju.edu.jo"];
 
 const ADMIN_NAV = [
+  { id: "systems", icon: "◈", label: "Manage Systems" },
   { id: "overview", icon: "⊞", label: "Dashboard Overview" },
   { id: "upload", icon: "⬆", label: "Upload Lecture" },
   { id: "importJson", icon: "📥", label: "Import JSON" },
@@ -1430,6 +1431,229 @@ function ManageLectures() {
 // ════════════════════════════════════════════════════════════════════════════
 // MANAGE SYSTEMS
 // ════════════════════════════════════════════════════════════════════════════
+function SystemForm({ initial, onClose, onSaved }) {
+  const [s, setS] = useState({ name: initial?.name || "", color: initial?.color || SUBJECT_COLORS[0] });
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
+
+  const save = async () => {
+    setErr("");
+    if (!s.name.trim()) return setErr("System name is required.");
+    setSaving(true);
+    const { error } = await supabase.from("systems").update({ name: s.name.trim(), color: s.color }).eq("id", initial.id);
+    setSaving(false);
+    if (error) return setErr(error.message);
+    onSaved();
+  };
+
+  return (
+    <Modal
+      title="Edit system"
+      onClose={onClose}
+      footer={
+        <>
+          <GhostButton onClick={onClose}>Cancel</GhostButton>
+          <PrimaryButton onClick={save} style={{ opacity: saving ? 0.7 : 1, pointerEvents: saving ? "none" : "auto" }}>{saving ? "Saving…" : "Save"}</PrimaryButton>
+        </>
+      }
+    >
+      {err && <Banner>{err}</Banner>}
+      <div style={{ marginBottom: 14 }}>
+        <FieldLabel>Name</FieldLabel>
+        <input value={s.name} onChange={(e) => setS({ ...s, name: e.target.value })} placeholder="e.g. Cardiovascular" style={inputStyle} />
+      </div>
+      <FieldLabel>Colour</FieldLabel>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        {SUBJECT_COLORS.map((c) => (
+          <button key={c} onClick={() => setS({ ...s, color: c })} style={{ width: 30, height: 30, borderRadius: 8, background: c, border: s.color === c ? `3px solid ${colors.navy}` : "3px solid transparent", cursor: "pointer" }} />
+        ))}
+      </div>
+    </Modal>
+  );
+}
+
+function ManageSystems() {
+  const [systems, setSystems] = useState([]);
+  const [subjects, setSubjects] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  const [name, setName] = useState("");
+  const [color, setColor] = useState(SUBJECT_COLORS[0]);
+  const [saving, setSaving] = useState(false);
+  const [showDeleted, setShowDeleted] = useState(false);
+  const [editing, setEditing] = useState(null);
+
+  const load = useCallback(async () => {
+    const sysQuery = showDeleted
+      ? supabase.from("systems").select("*").order("name")
+      : supabase.from("systems").select("*").is("deleted_at", null).order("name");
+    const [sys, subs] = await Promise.all([
+      sysQuery,
+      supabase.from("subjects").select("id, name, color, system_id").is("deleted_at", null).order("name"),
+    ]);
+    if (sys.error) setErr(sys.error.message);
+    else {
+      setErr("");
+      setSystems(sys.data || []);
+      setSubjects(subs.data || []);
+    }
+    setLoading(false);
+  }, [showDeleted]);
+  useEffect(() => {
+    (async () => {
+      await load();
+    })();
+  }, [load]);
+
+  const addSystem = async () => {
+    setErr("");
+    if (!name.trim()) return setErr("System name is required.");
+    setSaving(true);
+    const { error } = await supabase.from("systems").insert({ name: name.trim(), color });
+    setSaving(false);
+    if (error) return setErr(error.message);
+    setName("");
+    load();
+  };
+
+  const removeSystem = async (id) => {
+    if (!window.confirm("This item will be hidden from students but can be restored later.")) return;
+    const { error } = await supabase.from("systems").update({ deleted_at: new Date().toISOString() }).eq("id", id);
+    if (error) setErr(error.message);
+    else load();
+  };
+
+  const restoreSystem = async (id) => {
+    const { error } = await supabase.from("systems").update({ deleted_at: null }).eq("id", id);
+    if (error) setErr(error.message);
+    else load();
+  };
+
+  const assignSubject = async (subjectId, systemId) => {
+    const next = systemId || null;
+    const { error } = await supabase.from("subjects").update({ system_id: next }).eq("id", subjectId);
+    if (error) setErr(error.message);
+    else setSubjects((subs) => subs.map((s) => (s.id === subjectId ? { ...s, system_id: next } : s)));
+  };
+
+  const subjectCount = (sysId) => subjects.filter((s) => s.system_id === sysId).length;
+
+  const swatch = (c) => <span style={{ width: 12, height: 12, borderRadius: 4, background: c || colors.blue, display: "inline-block", flexShrink: 0 }} />;
+
+  return (
+    <>
+      <AdminHeader
+        title="Manage Systems"
+        subtitle="Group subjects into organ systems / blocks"
+        right={<ShowDeletedToggle on={showDeleted} onToggle={() => setShowDeleted((v) => !v)} />}
+      />
+      {err && <Banner>{err}</Banner>}
+
+      {/* Add system */}
+      <Card style={{ marginBottom: 18 }}>
+        <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 14 }}>Add a system</div>
+        <div style={{ display: "flex", gap: 14, alignItems: "flex-end", flexWrap: "wrap" }}>
+          <div style={{ flex: 1, minWidth: 200 }}>
+            <FieldLabel>Name</FieldLabel>
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Cardiovascular" style={inputStyle} />
+          </div>
+          <div>
+            <FieldLabel>Colour</FieldLabel>
+            <div style={{ display: "flex", gap: 6 }}>
+              {SUBJECT_COLORS.map((c) => (
+                <button key={c} onClick={() => setColor(c)} style={{ width: 28, height: 28, borderRadius: 7, background: c, border: color === c ? `3px solid ${colors.navy}` : "3px solid transparent", cursor: "pointer" }} />
+              ))}
+            </div>
+          </div>
+          <PrimaryButton onClick={addSystem} style={{ opacity: saving ? 0.7 : 1, pointerEvents: saving ? "none" : "auto" }}>{saving ? "Adding…" : "Add system"}</PrimaryButton>
+        </div>
+      </Card>
+
+      {/* Systems table */}
+      <Card style={{ padding: 0, overflow: "hidden", marginBottom: 18 }}>
+        {loading ? (
+          <Spinner />
+        ) : systems.length === 0 ? (
+          <EmptyState icon="🗂️">No systems yet. Add one above.</EmptyState>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ background: "#F8FAFF" }}>
+                <th style={th}>System</th>
+                <th style={th}>Colour</th>
+                <th style={th}>Subjects</th>
+                <th style={{ ...th, textAlign: "right" }}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {systems.map((s) => (
+                <tr key={s.id} style={s.deleted_at ? { opacity: 0.55 } : undefined}>
+                  <td style={{ ...td, fontWeight: 600 }}>
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>{swatch(s.color)}{s.name}{s.deleted_at && <DeletedPill />}</span>
+                  </td>
+                  <td style={{ ...td, color: colors.textMuted, fontSize: 12 }}>{s.color}</td>
+                  <td style={td}>{subjectCount(s.id)}</td>
+                  <td style={{ ...td, textAlign: "right", whiteSpace: "nowrap" }}>
+                    {s.deleted_at ? (
+                      <button onClick={() => restoreSystem(s.id)} style={restoreBtn}>Restore</button>
+                    ) : (
+                      <>
+                        <button onClick={() => setEditing(s)} style={{ ...iconBtn, marginRight: 6 }}>Edit</button>
+                        <button onClick={() => removeSystem(s.id)} style={{ ...iconBtn, color: colors.red, borderColor: "#FECACA" }}>Delete</button>
+                      </>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Card>
+
+      {/* Assign subjects to systems */}
+      <Card style={{ padding: 0, overflow: "hidden" }}>
+        <div style={{ padding: "18px 24px", borderBottom: `1px solid ${colors.line}`, fontSize: 15, fontWeight: 700 }}>Assign subjects to systems</div>
+        {loading ? (
+          <Spinner />
+        ) : subjects.length === 0 ? (
+          <EmptyState icon="📚">No subjects yet. Add subjects first.</EmptyState>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ background: "#F8FAFF" }}>
+                <th style={th}>Subject</th>
+                <th style={th}>System</th>
+              </tr>
+            </thead>
+            <tbody>
+              {subjects.map((s) => (
+                <tr key={s.id}>
+                  <td style={{ ...td, fontWeight: 600 }}>
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>{swatch(s.color)}{s.name}</span>
+                  </td>
+                  <td style={td}>
+                    <select value={s.system_id || ""} onChange={(e) => assignSubject(s.id, e.target.value)} style={{ ...inputStyle, width: 260 }}>
+                      <option value="">— Unassigned —</option>
+                      {systems.filter((sys) => !sys.deleted_at).map((sys) => (
+                        <option key={sys.id} value={sys.id}>{sys.name}</option>
+                      ))}
+                    </select>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Card>
+
+      {editing && <SystemForm initial={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} />}
+    </>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 6. USER MANAGEMENT
+// ════════════════════════════════════════════════════════════════════════════
 function UserManagement() {
   const [rows, setRows] = useState([]);
   const [statsByUser, setStatsByUser] = useState({});
@@ -1759,6 +1983,7 @@ export default function Admin() {
     questions: <ManageQuestions />,
     flashcards: <ManageFlashcards />,
     subjects: <ManageSubjects />,
+    systems: <ManageSystems />,
     manageTopics: <ManageTopics />,
     lectures: <ManageLectures />,
     users: <UserManagement />,

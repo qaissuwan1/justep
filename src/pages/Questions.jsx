@@ -128,7 +128,7 @@ export default function Questions() {
         data: { user },
       } = await supabase.auth.getUser();
       const [{ data: sys }, { data: subj }, { data: lecs }, { data: qrows }, prog, mk] = await Promise.all([
-        supabase.from("systems").select("id,name").order("name"),
+        supabase.from("systems").select("id,name").is("deleted_at", null).order("name"),
         supabase.from("subjects").select("id,name,system_id").order("name"),
         supabase.from("lectures").select("id,title,subject_id,order_index").order("order_index"),
         supabase.from("questions").select("id,subject_id,lecture_id").eq("published", true).is("deleted_at", null),
@@ -161,6 +161,7 @@ export default function Questions() {
 
       if (cancelled) return;
       setSystems(sys || []);
+      if (searchParams.get("subject")) { const parent = (subj || []).find(s => s.id === searchParams.get("subject")); if (parent?.system_id) setPickedSystems([parent.system_id]); }
       setSubjects(subjList);
       setLectures(lecs || []);
       setUserQ(uq);
@@ -170,7 +171,7 @@ export default function Questions() {
     return () => {
       cancelled = true;
     };
-  }, [phase]);
+  }, [phase, searchParams]);
 
   /* ---------------- generate block ---------------- */
   async function startBlock(ids, n) {
@@ -850,8 +851,8 @@ function ResultCell({ label, value, color, big, last }) {
 /* ================================================================== */
 function Setup(props) {
   const {
-    loadingMeta, noIncorrect, sessionMode, onNextTask, subjects, lectures, userQ, marks,
-    pickedSystems,
+    loadingMeta, noIncorrect, sessionMode, onNextTask, systems, subjects, lectures, userQ, marks,
+    pickedSystems, setPickedSystems,
     pickedSubjects, setPickedSubjects,
     pickedLectures, setPickedLectures,
     status, setStatus,
@@ -864,6 +865,17 @@ function Setup(props) {
   const toggleStatus = (k) => setStatus((s) => ({ ...s, [k]: !s[k] }));
 
   // cascading toggles with locking + child-clearing
+  const toggleSystem = (id) => {
+    if (pickedSystems.includes(id)) {
+      const remSub = subjects.filter((s) => s.system_id === id).map((s) => s.id);
+      const remLec = lectures.filter((l) => remSub.includes(l.subject_id)).map((l) => l.id);
+      setPickedSystems(pickedSystems.filter((x) => x !== id));
+      setPickedSubjects(pickedSubjects.filter((sid) => !remSub.includes(sid)));
+      setPickedLectures(pickedLectures.filter((lid) => !remLec.includes(lid)));
+    } else {
+      setPickedSystems([...pickedSystems, id]);
+    }
+  };
   const toggleSubject = (id) => {
     if (pickedSubjects.includes(id)) {
       const remLec = lectures.filter((l) => l.subject_id === id).map((l) => l.id);
@@ -907,7 +919,7 @@ function Setup(props) {
     if (q.lecture_id) lecCount[q.lecture_id] = (lecCount[q.lecture_id] || 0) + 1;
   });
 
-  const shownSubjects = subjects;
+  const shownSubjects = subjects.filter((s) => pickedSystems.includes(s.system_id));
   const shownLectures = lectures.filter((l) => pickedSubjects.includes(l.subject_id));
 
   const finalPool = userQ.filter((q) => cascade(q) && passStatus(q));
@@ -920,12 +932,15 @@ function Setup(props) {
   };
   const take = clampNum(numQuestions);
 
-  const subjectsLocked = false;
+  const subjectsLocked = pickedSystems.length === 0;
   const lecturesLocked = pickedSubjects.length === 0;
 
   // master (select-all) checkboxes per cascading section
+  const sysAllOn = systems.length > 0 && pickedSystems.length === systems.length;
   const subAllOn = shownSubjects.length > 0 && pickedSubjects.length === shownSubjects.length;
   const lecAllOn = shownLectures.length > 0 && pickedLectures.length === shownLectures.length;
+  const toggleSysMaster = () =>
+    sysAllOn ? toggleSystemClearAll(setPickedSystems, setPickedSubjects, setPickedLectures) : setPickedSystems(systems.map((s) => s.id));
   const toggleSubMaster = () => {
     if (subAllOn) {
       setPickedSubjects([]);
@@ -974,12 +989,23 @@ function Setup(props) {
             </Section>
 
             {/* 3. CASCADING */}
+            <Section title="Systems" master={{ on: sysAllOn, onToggle: toggleSysMaster }}>
+              {systems.length === 0 ? (
+                <Empty>No systems configured yet.</Empty>
+              ) : (
+                <Grid single={isMobile}>
+                  {systems.map((s) => (
+                    <CheckRow key={s.id} on={pickedSystems.includes(s.id)} onClick={() => toggleSystem(s.id)} label={s.name} count={sysCount[s.id] || 0} />
+                  ))}
+                </Grid>
+              )}
+            </Section>
 
             <Section title="Subjects" locked={subjectsLocked} master={{ on: subAllOn, onToggle: toggleSubMaster, disabled: subjectsLocked }}>
               {subjectsLocked ? (
-                <Locked>Select a subject.</Locked>
+                <Locked>Select a system first.</Locked>
               ) : shownSubjects.length === 0 ? (
-                <Empty>No subjects available yet.</Empty>
+                <Empty>No subjects for the selected systems.</Empty>
               ) : (
                 <Grid single={isMobile}>
                   {shownSubjects.map((s) => (
@@ -1041,7 +1067,11 @@ function Setup(props) {
   );
 }
 
-
+function toggleSystemClearAll(setSys, setSub, setLec) {
+  setSys([]);
+  setSub([]);
+  setLec([]);
+}
 
 /* ---- setup sub-components ---- */
 function Section({ title, children, locked, master, totalPill }) {

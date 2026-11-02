@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { colors, font } from "../theme";
-
+import useIsMobile from "../lib/useIsMobile";
 import Skeleton, { ErrorState } from "../components/Skeleton";
 import SessionBar, { SESSION_BAR_H } from "../components/SessionBar";
 import { goToNextTask } from "../lib/session";
@@ -14,7 +14,7 @@ import { goToNextTask } from "../lib/session";
 
 export default function Subjects() {
   const navigate = useNavigate();
-
+  const isMobile = useIsMobile();
   const [searchParams] = useSearchParams();
   const lectureParam = searchParams.get("lecture");
   const sessionMode = searchParams.get("session") === "1";
@@ -22,16 +22,16 @@ export default function Subjects() {
   const [error, setError] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
 
-  const [, setSystems] = useState([]);
+  const [systems, setSystems] = useState([]);
   const [subjects, setSubjects] = useState([]);
   const [lectures, setLectures] = useState([]);
 
   // counts
-  const [, setSysMeta] = useState({});   // systemId -> {subjects, topics}
+  const [sysMeta, setSysMeta] = useState({});   // systemId -> {subjects, topics}
   const [subMeta, setSubMeta] = useState({});   // subjectId -> {topics}
   const [lecMeta, setLecMeta] = useState({});   // lectureId -> {q, qDone, f, fDone}
 
-  const [, setSelSys] = useState(null);
+  const [selSys, setSelSys] = useState(null);
   const [selSub, setSelSub] = useState(null);
   const [highlightLec, setHighlightLec] = useState(null); // deep-linked lecture to glow
 
@@ -46,7 +46,7 @@ export default function Subjects() {
       try {
         const { data: { user } } = await supabase.auth.getUser();
         const results = await Promise.all([
-          supabase.from("systems").select("id,name,color").order("name"),
+          supabase.from("systems").select("id,name,color").is("deleted_at", null).order("name"),
           supabase.from("subjects").select("id,name,color,system_id").is("deleted_at", null).order("name"),
           supabase.from("lectures").select("id,title,subject_id,order_index").is("deleted_at", null).order("order_index"),
           supabase.from("questions").select("id,subject_id,lecture_id").eq("published", true).is("deleted_at", null),
@@ -148,21 +148,215 @@ export default function Subjects() {
     if (error) console.error("lecture_progress complete upsert failed:", error);
   }
 
-  const visibleSubjects = subjects;
+  const visibleSubjects = subjects.filter((s) => s.system_id === selSys?.id);
   const visibleLectures = lectures.filter((l) => l.subject_id === selSub?.id);
 
-  if (error) return <ErrorState onRetry={retry} />;
-  if (loading) return <Skeleton height={320} radius={18} />;
-  return <>
-    {sessionMode && <SessionBar />}
-    <div style={{paddingTop:sessionMode ? SESSION_BAR_H : 0}}>
-      <header className="workspace-heading"><span className="eyebrow">YOUR CURRICULUM</span><h1>{selSub ? selSub.name : 'A place for every subject.'}</h1><p>Move through your lectures, practice what matters, and keep your progress in view.</p></header>
-      {selSub && <button className="workspace-back" onClick={()=>setSelSub(null)}>← All subjects</button>}
-      {!selSub ? <div className="subject-grid">{visibleSubjects.map((s,i)=><button className="subject-card" key={s.id} onClick={()=>setSelSub(s)}><span>SUBJECT {String(i+1).padStart(2,'0')}</span><strong>{s.name}</strong><span>{subMeta[s.id]?.topics || 0} lectures <span aria-hidden="true">↗</span></span></button>)}</div> : <div className="lecture-list">{visibleLectures.map(l=><LectureCard key={l.id} l={l} m={lecMeta[l.id] || {q:0,qDone:0,f:0,fDone:0}} prog={lecProgress[l.id]} onOpenNav={openAndGo} onComplete={markComplete} highlight={l.id===highlightLec}/>)}</div>}
-      {(!subjects.length || (selSub && !visibleLectures.length)) && <div className="workspace-empty">Your curriculum is being prepared. Check back for new content.</div>}
+  if (error) {
+    return (
+      <div style={{ fontFamily: font, color: colors.text }}>
+        <h1 style={{ fontSize: 24, margin: "0 0 4px" }}>Library</h1>
+        <p style={{ color: colors.textSoft, margin: "0 0 20px", fontSize: 14 }}>
+          Browse questions and active recall by system, subject, and topic.
+        </p>
+        <ErrorState onRetry={retry} />
+      </div>
+    );
+  }
+
+  if (loading) {
+    const colSkeleton = (
+      <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 10 }}>
+        {[0, 1, 2, 3, 4].map((i) => (
+          <Skeleton key={i} height={44} radius={8} />
+        ))}
+      </div>
+    );
+    return (
+      <div style={{ fontFamily: font, color: colors.text }}>
+        <h1 style={{ fontSize: 24, margin: "0 0 4px" }}>Library</h1>
+        <p style={{ color: colors.textSoft, margin: "0 0 20px", fontSize: 14 }}>
+          Browse questions and active recall by system, subject, and topic.
+        </p>
+        <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr 1.3fr", gap: 0, border: `1px solid ${colors.line}`, borderRadius: 14, overflow: "hidden", minHeight: isMobile ? 320 : 460, background: colors.card }}>
+          {isMobile ? (
+            colSkeleton
+          ) : (
+            <>
+              <div style={{ borderRight: `1px solid ${colors.line}` }}>{colSkeleton}</div>
+              <div style={{ borderRight: `1px solid ${colors.line}` }}>{colSkeleton}</div>
+              <div>{colSkeleton}</div>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      {sessionMode && <SessionBar />}
+      <div style={{ fontFamily: font, color: colors.text, paddingTop: sessionMode ? SESSION_BAR_H : 0 }}>
+      <h1 style={{ fontSize: 24, margin: "0 0 4px" }}>Library</h1>
+      <p style={{ color: colors.textSoft, margin: "0 0 20px", fontSize: 14 }}>
+        Browse questions and active recall by system, subject, and topic.
+      </p>
+
+      {isMobile ? (
+        <div style={{ border: `1px solid ${colors.line}`, borderRadius: 14, overflow: "hidden", background: colors.card, minHeight: 320 }}>
+          {/* Level 1 — Systems */}
+          {!selSys && (
+            <>
+              <div style={colHeader}>Systems</div>
+              {systems.length === 0 ? (
+                <div style={emptyMsg}>No systems yet.</div>
+              ) : (
+                systems.map((s) => {
+                  const m = sysMeta[s.id] || { subjects: 0, topics: 0 };
+                  return (
+                    <button key={s.id} onClick={() => { setSelSys(s); setSelSub(null); }} style={rowItem(false)}>
+                      <div style={{ flex: 1, textAlign: "left" }}>
+                        <div style={{ fontWeight: 600, fontSize: 14 }}>{s.name}</div>
+                        <div style={{ fontSize: 12, color: colors.textSoft, marginTop: 2 }}>{m.subjects} subjects · {m.topics} topics</div>
+                      </div>
+                      <span style={{ color: colors.textSoft }}>›</span>
+                    </button>
+                  );
+                })
+              )}
+            </>
+          )}
+
+          {/* Level 2 — Subjects */}
+          {selSys && !selSub && (
+            <>
+              <button onClick={() => { setSelSys(null); setSelSub(null); }} style={backRow}>‹ Systems</button>
+              <div style={colHeader}>{selSys.name}</div>
+              {visibleSubjects.length === 0 ? (
+                <div style={emptyMsg}>No subjects in this system.</div>
+              ) : (
+                visibleSubjects.map((s) => {
+                  const m = subMeta[s.id] || { topics: 0 };
+                  return (
+                    <button key={s.id} onClick={() => setSelSub(s)} style={rowItem(false)}>
+                      <div style={{ flex: 1, textAlign: "left" }}>
+                        <div style={{ fontWeight: 600, fontSize: 14, textTransform: "capitalize" }}>{s.name}</div>
+                        <div style={{ fontSize: 12, color: colors.textSoft, marginTop: 2 }}>{m.topics} topics</div>
+                      </div>
+                      <span style={{ color: colors.textSoft }}>›</span>
+                    </button>
+                  );
+                })
+              )}
+            </>
+          )}
+
+          {/* Level 3 — Topics */}
+          {selSub && (
+            <>
+              <button onClick={() => setSelSub(null)} style={backRow}>‹ {selSys?.name || "Subjects"}</button>
+              <div style={colHeader}>{selSub.name}</div>
+              {visibleLectures.length === 0 ? (
+                <div style={emptyMsg}>No topics in this subject yet.</div>
+              ) : (
+                <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 12 }}>
+                  {visibleLectures.map((l) => (
+                    <LectureCard
+                      key={l.id}
+                      l={l}
+                      m={lecMeta[l.id] || { q: 0, qDone: 0, f: 0, fDone: 0 }}
+                      prog={lecProgress[l.id]}
+                      onOpenNav={openAndGo}
+                      onComplete={markComplete}
+                      highlight={l.id === highlightLec}
+                    />
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      ) : (
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1.3fr", gap: 0, border: `1px solid ${colors.line}`, borderRadius: 14, overflow: "hidden", minHeight: 460, background: colors.card }}>
+
+        {/* COLUMN 1 — Systems */}
+        <div style={{ borderRight: `1px solid ${colors.line}`, overflowY: "auto", maxHeight: 560 }}>
+          <div style={colHeader}>Systems</div>
+          {systems.map((s) => {
+            const m = sysMeta[s.id] || { subjects: 0, topics: 0 };
+            const active = selSys?.id === s.id;
+            return (
+              <button key={s.id} onClick={() => { setSelSys(s); setSelSub(null); }} style={rowItem(active)}>
+                <div style={{ flex: 1, textAlign: "left" }}>
+                  <div style={{ fontWeight: 600, fontSize: 14 }}>{s.name}</div>
+                  <div style={{ fontSize: 12, color: colors.textSoft, marginTop: 2 }}>{m.subjects} subjects · {m.topics} topics</div>
+                </div>
+                <span style={{ color: colors.textSoft }}>›</span>
+              </button>
+            );
+          })}
+          {systems.length === 0 && <div style={emptyMsg}>No systems yet.</div>}
+        </div>
+
+        {/* COLUMN 2 — Subjects */}
+        <div style={{ borderRight: `1px solid ${colors.line}`, overflowY: "auto", maxHeight: 560 }}>
+          <div style={colHeader}>{selSys ? "Subjects" : ""}</div>
+          {!selSys ? (
+            <div style={placeholder}>Select a system</div>
+          ) : visibleSubjects.length === 0 ? (
+            <div style={emptyMsg}>No subjects in this system.</div>
+          ) : (
+            visibleSubjects.map((s) => {
+              const m = subMeta[s.id] || { topics: 0 };
+              const active = selSub?.id === s.id;
+              return (
+                <button key={s.id} onClick={() => setSelSub(s)} style={rowItem(active)}>
+                  <div style={{ flex: 1, textAlign: "left" }}>
+                    <div style={{ fontWeight: 600, fontSize: 14, textTransform: "capitalize" }}>{s.name}</div>
+                    <div style={{ fontSize: 12, color: colors.textSoft, marginTop: 2 }}>{m.topics} topics</div>
+                  </div>
+                  <span style={{ color: colors.textSoft }}>›</span>
+                </button>
+              );
+            })
+          )}
+        </div>
+
+        {/* COLUMN 3 — Topics (lectures) */}
+        <div style={{ overflowY: "auto", maxHeight: 560 }}>
+          <div style={colHeader}>{selSub ? selSub.name : ""}</div>
+          {!selSub ? (
+            <div style={placeholder}>Select a subject</div>
+          ) : visibleLectures.length === 0 ? (
+            <div style={emptyMsg}>No topics in this subject yet.</div>
+          ) : (
+            <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 12 }}>
+              {visibleLectures.map((l) => (
+                <LectureCard
+                  key={l.id}
+                  l={l}
+                  m={lecMeta[l.id] || { q: 0, qDone: 0, f: 0, fDone: 0 }}
+                  prog={lecProgress[l.id]}
+                  onOpenNav={openAndGo}
+                  onComplete={markComplete}
+                  highlight={l.id === highlightLec}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+      )}
     </div>
-    {sessionMode && <button style={completeBtn} onClick={()=>goToNextTask(navigate)}>Next task →</button>}
-  </>;
+      {sessionMode && (
+        <button
+          onClick={() => goToNextTask(navigate)}
+          style={{ position: "fixed", right: 20, bottom: 20, zIndex: 4000, background: "#16A34A", color: "#fff", border: "none", borderRadius: 999, padding: "13px 22px", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: font, boxShadow: "0 6px 20px rgba(0,0,0,0.18)" }}
+        >
+          Next task →
+        </button>
+      )}
+    </>
+  );
 }
 
 function LectureCard({ l, m, prog, onOpenNav, onComplete, highlight }) {
@@ -222,9 +416,22 @@ function ProgressRow({ icon, label, done, total, onClick }) {
   );
 }
 
+const colHeader = { padding: "12px 16px", fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: colors.textSoft, borderBottom: `1px solid ${colors.line}`, position: "sticky", top: 0, background: colors.card, minHeight: 18 };
+const rowItem = (active) => ({
+  display: "flex", alignItems: "center", gap: 8, width: "100%",
+  padding: "13px 16px", border: "none", borderBottom: `1px solid ${colors.line}`,
+  background: active ? "#FEF3C7" : "transparent", cursor: "pointer", fontFamily: font, color: colors.text,
+});
 const topicCard = { border: `1px solid ${colors.line}`, borderRadius: 12, padding: 14 };
 const completeBtn = { fontSize: 12, fontWeight: 600, color: colors.blue, background: "#fff", border: `1px solid ${colors.line}`, borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontFamily: font };
+const backRow = {
+  display: "flex", alignItems: "center", gap: 6, width: "100%",
+  padding: "11px 16px", border: "none", borderBottom: `1px solid ${colors.line}`,
+  background: colors.bg, cursor: "pointer", fontFamily: font, color: colors.blue, fontSize: 13, fontWeight: 600,
+};
 const progRow = {
   display: "flex", alignItems: "center", gap: 8, width: "100%", marginTop: 6,
   background: "#EFF4FF", border: "none", borderRadius: 8, padding: "8px 10px", cursor: "pointer", fontFamily: font,
 };
+const placeholder = { padding: "60px 20px", textAlign: "center", color: colors.textSoft, fontSize: 14 };
+const emptyMsg = { padding: "24px 16px", color: colors.textSoft, fontSize: 13 };
