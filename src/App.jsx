@@ -15,6 +15,7 @@ import Subjects from "./pages/Subjects";
 import Leaderboard from "./pages/Leaderboard";
 import Profile from "./pages/Profile";
 import Performance from "./pages/Performance";
+import Reports from "./pages/Reports";
 import Admin from "./pages/Admin";
 import { colors, font, gradients } from "./theme";
 
@@ -61,6 +62,7 @@ export default function App() {
           <Route path="leaderboard" element={<Leaderboard />} />
           <Route path="profile" element={<Profile />} />
           <Route path="performance" element={<Performance />} />
+          <Route path="performance/reports" element={<Reports />} />
           <Route path="admin" element={<Admin />} />
         </Route>
 

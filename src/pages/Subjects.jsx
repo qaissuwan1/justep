@@ -17,6 +17,7 @@ export default function Subjects() {
   const isMobile = useIsMobile();
   const [searchParams] = useSearchParams();
   const lectureParam = searchParams.get("lecture");
+  const subjectParam = searchParams.get("subject");
   const sessionMode = searchParams.get("session") === "1";
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
@@ -98,6 +99,10 @@ export default function Subjects() {
         setLecProgress(lp);
 
         // Deep-link: ?lecture=<id> — drill the columns to it and flag for highlight.
+        if (subjectParam) {
+          const sub = (subs || []).find(s => s.id === subjectParam);
+          if (sub) { setSelSub(sub); setSelSys((sys || []).find(s => s.id === sub.system_id) || null); }
+        }
         if (lectureParam) {
           const lec = (lecs || []).find((l) => l.id === lectureParam);
           const sub = lec ? (subs || []).find((s) => s.id === lec.subject_id) : null;
@@ -115,7 +120,7 @@ export default function Subjects() {
     return () => {
       cancelled = true;
     };
-  }, [reloadKey, lectureParam]);
+  }, [reloadKey, lectureParam, subjectParam]);
 
   const retry = () => setReloadKey((k) => k + 1);
 

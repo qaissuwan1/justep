@@ -11,7 +11,8 @@ import useIsMobile from "../lib/useIsMobile";
 const navItems = [
   { to: "/app/home", icon: "⊞", label: "Overview" },
   { to: "/app/questions", icon: "☰", label: "Create Test" },
-  { to: "/app/performance", icon: "◴", label: "Performance" },
+  { to: "/app/performance", icon: "◴", label: "Overall Performance" },
+  { to: "/app/performance/reports", icon: "▤", label: "Reports" },
   { to: "/app/flashcards", icon: "▣", label: "Flashcards" },
   { to: "/app/subjects", icon: "◈", label: "Systems & Subjects" },
   { to: "/app/leaderboard", icon: "≡", label: "Leaderboard" },
@@ -37,7 +38,7 @@ const navLinkStyle = ({ isActive }) => ({
 
 export default function Layout() {
   const navigate = useNavigate();
-  const isPerformance = useLocation().pathname === "/app/performance";
+  const isPerformance = useLocation().pathname.startsWith("/app/performance");
   const isMobile = useIsMobile();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const closeDrawer = () => setDrawerOpen(false);
@@ -174,7 +175,7 @@ export default function Layout() {
         {/* Nav */}
         <nav style={{ flex: 1, padding: "0 12px", overflowY: "auto" }}>
           {navItems.map((item) => (
-            <NavLink key={item.to} to={item.to} onClick={closeDrawer} style={navLinkStyle}>
+            <NavLink end key={item.to} to={item.to} onClick={closeDrawer} style={navLinkStyle}>
               <span style={{ fontSize: 16 }}>{item.icon}</span>
               {item.label}
             </NavLink>

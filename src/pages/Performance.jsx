@@ -55,7 +55,7 @@ export default function Performance() {
   return <div className="performance-page">
     <header className="performance-header"><div><span className="performance-kicker">QBANK / PERFORMANCE</span><h1>Overall Performance</h1></div><Link to="/app/home">⌂ <span>Home</span></Link></header>
     <div className="performance-body">
-      <nav className="performance-tabs" aria-label="Performance navigation"><span aria-current="page">Overall</span><Link to="/app/questions">Create Test ↗</Link><Link to="/app/subjects">Systems & Subjects ↗</Link></nav>
+      <nav className="performance-tabs" aria-label="Performance navigation"><span aria-current="page">Overall</span><Link to="/app/performance/reports">Reports</Link><Link to="/app/questions">Create Test ↗</Link><Link to="/app/subjects">Systems & Subjects ↗</Link></nav>
       <section className="performance-panel" aria-labelledby="stats-heading">
         <div className="performance-panel-heading"><h2 id="stats-heading">Statistics</h2><button onClick={()=>window.print()} disabled={!stats}>▤ Print</button></div>
         {error ? <div className="performance-empty" role="alert"><h2>Unable to load your performance</h2><p>Your history is safe. Please check your connection and try again.</p><button onClick={()=>setVersion(v=>v+1)}>Try again</button></div> : !stats ? <div className="performance-empty" role="status">Loading your performance…</div> : <>
